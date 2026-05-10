@@ -97,7 +97,7 @@ You can obtain the project in two ways.
 Use this option if you do not use Git.
 
 1. Open the GitHub repository page:
-   https://github.com/ianca-kpa/metabolomics-pipeline_git
+   https://github.com/ianca-kpa/compound-discoverer-metabolomics-pipeline-in-R.git
 2. Click **Code**.
 3. Click **Download ZIP**.
 4. Extract the ZIP file to a folder on your computer.
@@ -110,7 +110,7 @@ Important: run the project from the extracted folder, not from inside the compre
 Use this option if Git is installed on your computer.
 
 ```powershell
-git clone https://github.com/ianca-kpa/metabolomics-pipeline_git.git
+git clone https://github.com/ianca-kpa/compound-discoverer-metabolomics-pipeline-in-R.git
 cd metabolomics-pipeline_git
 ```
 
