@@ -224,7 +224,7 @@ Use this log to check which steps were completed and to diagnose errors.
 ### 1. Clone the repository
 
 ```powershell
-git clone https://github.com/ianca-kpa/metabolomics-pipeline_git.git
+git clone https://github.com/ianca-kpa/compound-discoverer-metabolomics-pipeline-in-R.git
 cd metabolomics-pipeline_git
 ```
 
