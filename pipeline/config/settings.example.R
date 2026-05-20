@@ -13,9 +13,9 @@ cd_sheet <- 1                                  # options: sheet index or sheet n
 metadata_path <- "data/metadata_example.xlsx"
 metadata_sheet <- 1                            # options: sheet index or sheet name
 
-comparison_path <- "data/comparison_example.xlsx"
-comparison_sheet <- 1                          # options: sheet index or sheet name
-use_reference_file <- TRUE                     # options: TRUE/FALSE (when FALSE, comparison file is ignored)
+reference_path <- "data/reference_example.xlsx"
+reference_sheet <- 1                           # options: sheet index or sheet name
+use_reference_file <- TRUE                     # options: TRUE/FALSE (when FALSE, reference file is ignored)
 
 # Optional manual reference-column names (leave "" for auto-detect)
 reference_col_metabolite <- ""                 # e.g. "metabolite"
@@ -52,8 +52,16 @@ low_variance_filter_fraction <- 0.20           # options: 0..1
 log2_offset <- 1 # options: 0, 1, 0.5 ... (avoid 0 if you may have zeros)
 
 # Statistical thresholds
-alpha_sig <- 0.05                              # options: numeric between 0 and 1 (significance threshold for adjusted p-values)       
+p_value_cutoff <- 0.05                         # options: numeric between 0 and 1 (significance threshold for p-value based stats)
+fdr_cutoff <- 0.05                             # options: numeric between 0 and 1 (significance threshold for FDR based stats)
 fc_cutoff_log2 <- 0                            # options: numeric >= 0 (log2 fold change cutoff for volcano plot labeling and significant heatmap filtering; set to 0 to disable fold change cutoff)   
+alpha_sig <- p_value_cutoff                    # compatibility alias used by significant heatmap code
+
+# Statistical test configuration
+# options for statistical_test_type: "student", "welch", "wilcoxon", "limma"
+statistical_test_type <- "student"             # options: "student" (Student's t-test), "welch" (Welch's t-test), "wilcoxon" (Wilcoxon rank-sum test), "limma" (Moderated t-test using empirical Bayes)
+test_is_paired <- FALSE                        # options: TRUE/FALSE (if TRUE, uses paired test; if FALSE, uses unpaired test)
+pvalue_correction_method <- "FDR"              # options: "raw", "FDR", "Bonferroni", "Holm", "Hochberg", "Hommel", "BY" (method for p-value adjustment; "raw" = no correction)
 
 # Known-only filter
 use_only_known <- TRUE                         # options: TRUE/FALSE
@@ -116,7 +124,7 @@ volcano_axis_expand_mult <- 0.08               # options: numeric > 0
 
 # Labels
 volcano_add_labels <- TRUE                     # options: TRUE/FALSE
-volcano_label_number <- 10                     # options: integer >= 0
+volcano_label_number <- Inf                    # options: integer >= 0 or Inf (use Inf to label all significant points)
 
 # Use NULL for automatic labels.
 # Example: volcano_custom_labels <- c("L-Tryptophan", "Corticosterone")
