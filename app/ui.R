@@ -4,12 +4,22 @@ ui <- fluidPage(
     tags$link(
       rel = "stylesheet",
       href = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap"
-    )
-    ,
+    ),
     tags$link(
       rel = "stylesheet",
       href = "assets/styles.css"
-    )
+    ),
+    tags$script(HTML("
+      Shiny.addCustomMessageHandler('scrollPipelineLog', function(message) {
+        setTimeout(function() {
+          var logBox = document.getElementById('pipeline_log_box');
+
+          if (logBox) {
+            logBox.scrollTop = logBox.scrollHeight;
+          }
+        }, 100);
+      });
+    "))
   ),
   div(
     class = "app-shell",
@@ -36,7 +46,7 @@ ui <- fluidPage(
         tags$hr(),
 
         h4("Inputs"),
-        tags$p(class = "small-note", "Upload your data, metadata, and comparison files here. Accepted formats are CSV, TSV, TXT, XLSX, and XLS. Uploaded files will be copied to the 'data' directory in the project root."),
+        tags$p(class = "small-note", "Upload your data, metadata, and reference files here. Accepted formats are CSV, TSV, TXT, XLSX, and XLS. Uploaded files will be copied to the 'data' directory in the project root."),
         div(
           class = "big-file-input",
           fileInput(
@@ -59,27 +69,36 @@ ui <- fluidPage(
           "Manually map metadata columns and configure groups",
           value = FALSE
         ),
+        # textInput(
+        #   "allowed_metadata_groups",
+        #   "Allowed metadata groups (control first, test second)",
+        #   value = "WT, TG"
+        # ),
+        uiOutput("allowed_metadata_groups_hint"),
         tags$hr(),
         conditionalPanel(
           condition = "input.manual_metadata_cols == true",
-          textInput(
-            "allowed_metadata_groups",
-            "Allowed metadata groups (control first, test second)",
-            value = "WT, TG"
-          ),
-          tags$p(
-            class = "small-note",
-            "Examples: WT, TG or Control, Treated. The first value is used as control and the second as test during run configuration."
-          ),
-          div(
-            class = "grid-3x2",
-            textInput("metadata_col_sample", "Sample column", value = ""),
-            textInput("metadata_col_weight", "Weight column", value = ""),
-            textInput("metadata_col_group", "Group column", value = ""),
-            textInput("metadata_col_sex", "Sex column", value = ""),
-            textInput("metadata_col_model", "Model column", value = "")
-          ),
-          actionButton("apply_metadata_cols", "Apply metadata column mapping")
+          tags$div(
+            class = "metadata-mapping-panel",
+            uiOutput("metadata_model_alias_ui"),
+            checkboxInput(
+              "show_metadata_column_fields",
+              "Show metadata column fields",
+              value = FALSE
+            ),
+            conditionalPanel(
+              condition = "input.show_metadata_column_fields == true",
+              div(
+                class = "grid-3x2",
+                textInput("metadata_col_sample", "Sample column", value = ""),
+                textInput("metadata_col_weight", "Weight column", value = ""),
+                textInput("metadata_col_group", "Group column", value = ""),
+                textInput("metadata_col_sex", "Sex column", value = ""),
+                textInput("metadata_col_model", "Model column", value = "")
+              ),
+              actionButton("apply_metadata_cols", "Apply metadata column mapping")
+            )
+          )
         ),
         checkboxInput(
           "use_weight_normalization",
@@ -102,8 +121,8 @@ ui <- fluidPage(
           div(
             class = "big-file-input",
             fileInput(
-              "comparison_file",
-              "Comparison file",
+              "reference_file",
+              "Reference file",
               accept = c(".csv", ".tsv", ".txt", ".xlsx", ".xls")
             )
           ),
@@ -132,7 +151,7 @@ ui <- fluidPage(
           condition = "input.use_reference_file == false",
           tags$p(
             class = "small-note",
-            "Reference file disabled. Comparison input and manual reference-column settings are hidden."
+            "Reference file disabled. Reference input and manual reference-column settings are hidden."
           )
         ),
         tags$hr(),
@@ -200,6 +219,24 @@ ui <- fluidPage(
             choices = c("TRUE", "FALSE"),
             selected = if (setting_display_logical(initial_settings_text, "use_only_known", default = TRUE)) "TRUE" else "FALSE"
           )
+        ),
+        tags$hr(),
+        h4("Significance Testing"),
+        tags$p(class = "small-note", "Configure statistical test type, pairing, and p-value correction method."),
+        div(
+          class = "grid-3x1",
+          selectInput(
+            "statistical_test_type",
+            "Statistical test",
+            choices = c("student", "welch", "wilcoxon", "limma"),
+            selected = setting_display_value(initial_settings_text, "statistical_test_type", default = "student")
+          ),
+          selectInput(
+            "test_is_paired",
+            "Test type",
+            choices = c("Unpaired" = "FALSE", "Paired" = "TRUE"),
+            selected = if (setting_display_logical(initial_settings_text, "test_is_paired", default = FALSE)) "TRUE" else "FALSE"
+          )
         )
 
       ),
@@ -222,31 +259,28 @@ ui <- fluidPage(
           ),
           tabPanel(
             "Settings Builder",
-            tags$div(
-              class = "settings-header-row",
-              style = "display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;",
-              h4(style = "margin:0;", "Settings"),
-              tags$button(
-                type = "button",
-                class = "open_close_guide",
-                `data-toggle` = "collapse",
-                `data-target` = "#settingsGlossaryCollapse",
-                `aria-expanded` = "false",
-                `aria-controls` = "settingsGlossaryCollapse",
-                "Open/close variable guide"
-              )
-            ),
-            tags$p("Use the form below to configure key variables with standardized input fields."),
-            uiOutput("settings_builder_ui"),
-            tags$div(
-              style = "display:none;",
-              class = "save_settings_form", 
-              textAreaInput(
-                "config_text",
-                "settings.R content",
-                value = read_initial_config(),
-                rows = 40,
-                width = "100%"
+            tabsetPanel(
+              id = "settings_subtabs",
+              tabPanel(
+                "Settings form",
+                tags$p("Use the form below to configure key variables with standardized input fields.  The variable guide is in the other tab."),
+                uiOutput("settings_builder_ui"),
+                tags$div(
+                  style = "display:none;",
+                  class = "save_settings_form",
+                  textAreaInput(
+                    "config_text",
+                    "settings.R content",
+                    value = read_initial_config(),
+                    rows = 35,
+                    width = "auto"
+                  )
+                )
+              ),
+              tabPanel(
+                "Variable guide",
+                tags$p("Use this guide to check what each variable controls before editing the form."),
+                uiOutput("settings_glossary_ui")
               )
             )
           ),
@@ -254,6 +288,7 @@ ui <- fluidPage(
             "Pipeline Log",
             tags$p("Run pipeline from UI and inspect the latest execution log."),
             tags$pre(
+              id = "pipeline_log_box",
               style = "max-height: 850px; overflow-y: auto; background: #111; color: #f2f2f2; padding: 12px;",
               textOutput("pipeline_log")
             )
@@ -267,6 +302,8 @@ ui <- fluidPage(
             ),
             uiOutput("results_gallery")
           )
+          ,
+          
         )
       )
       )
