@@ -46,7 +46,11 @@ export_metaboanalyst_one_model <- function(log2_df,
       by = "sample"
     ) %>%
     dplyr::mutate(
-      Class = dplyr::if_else(type == "QC", "QC", as.character(group))
+      Class = dplyr::if_else(
+        type == "QC",
+        "QC",
+        map_comparison_group_display_values(group, model_name = model_name)
+      )
     )
 
   # Create export directory if it doesn't exist

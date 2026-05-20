@@ -166,7 +166,7 @@ collapse_duplicate_names <- function(mat, feature_tbl,
   used_ids <- feature_tbl$featureID
 
   # ---------------------------------------------------------------------------
-  # Strategy: use comparison file or best QC RSD to choose representative
+  # Strategy: use reference file or best QC RSD to choose representative
   # ---------------------------------------------------------------------------
 if (strategy == "reference_or_best_qc_rsd") {
   normalize_text <- function(x) {
@@ -379,23 +379,23 @@ if (strategy == "reference_or_best_qc_rsd") {
   }
 
   if (is.null(reference_tbl)) {
-    comparison_path_local <- if (exists("comparison_path", inherits = TRUE)) {
-      get("comparison_path", inherits = TRUE)
+    reference_path_local <- if (exists("reference_path", inherits = TRUE)) {
+      get("reference_path", inherits = TRUE)
     } else {
       NULL
     }
 
-    comparison_sheet_local <- if (exists("comparison_sheet", inherits = TRUE)) {
-      get("comparison_sheet", inherits = TRUE)
+    reference_sheet_local <- if (exists("reference_sheet", inherits = TRUE)) {
+      get("reference_sheet", inherits = TRUE)
     } else {
       1
     }
 
-    if (!is.null(comparison_path_local) &&
-        nzchar(as.character(comparison_path_local)) &&
+    if (!is.null(reference_path_local) &&
+        nzchar(as.character(reference_path_local)) &&
         exists("read_any_table", mode = "function")) {
       reference_tbl <- tryCatch(
-        read_any_table(comparison_path_local, comparison_sheet_local),
+        read_any_table(reference_path_local, reference_sheet_local),
         error = function(e) NULL
       )
     }

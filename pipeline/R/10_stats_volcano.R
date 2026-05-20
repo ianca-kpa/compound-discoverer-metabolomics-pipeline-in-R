@@ -9,26 +9,22 @@
   # 5sets_per_model() computes statistics for predefined comparisons and creates volcano plots, 
   # while export_stats_excel_by_model() saves the results in an Excel workbook with conditional formatting.
 
-# safe_var_equal_test(): A helper function that performs a variance equality test (F-test) between two groups, 
-# handling cases with insufficient data or non-finite values gracefully.
-safe_var_equal_test <- function(x, y) {
-  x <- x[is.finite(x)]
-  y <- y[is.finite(y)]
-
-  if (length(x) < 2 || length(y) < 2) {
-    return(list(p = NA_real_, var_equal = NA))
+resolve_volcano_styles <- function(volcano_style) {
+  style <- as.character(volcano_style)[1]
+  if (is.na(style) || !nzchar(style)) {
+    style <- "classic"
   }
 
-  vt <- tryCatch(var.test(x, y), error = function(e) NULL)
-  if (is.null(vt)) {
-    return(list(p = NA_real_, var_equal = NA))
+  if (identical(style, "both")) {
+    return(c("classic", "gradual"))
+  }
+  if (style %in% c("classic", "gradual")) {
+    return(style)
   }
 
-  p <- as.numeric(vt$p.value)
-  list(p = p, var_equal = is.finite(p) && (p > 0.05))
+  warning("Invalid volcano_style: ", style, ". Falling back to 'classic'.")
+  "classic"
 }
-
-FLOOR_P <- 1e-300
 
 # normalize_metric_modes(): Normalizes the input for metrics to run, 
 # expanding "FDR_and_p_value" into its components and validating the selection.
@@ -56,30 +52,152 @@ normalize_metric_modes <- function(metrics) {
   expanded
 }
 
-resolve_volcano_styles <- function(volcano_style) {
-  style <- as.character(volcano_style)[1]
-  if (is.na(style) || !nzchar(style)) {
-    style <- "classic"
+FLOOR_P <- 1e-300
+
+resolve_statistical_test_type <- function(test_type) {
+  test <- tolower(as.character(test_type)[1])
+
+  if (is.na(test) || !nzchar(test)) {
+    test <- "student"
   }
 
-  if (identical(style, "both")) {
-    return(c("classic", "gradual"))
-  }
-  if (style %in% c("classic", "gradual")) {
-    return(style)
+  if (!test %in% c("student", "welch", "wilcoxon", "limma")) {
+    warning("Invalid statistical_test_type: ", test, ". Falling back to 'student'.")
+    test <- "student"
   }
 
-  warning("Invalid volcano_style: ", style, ". Falling back to 'classic'.")
-  "classic"
+  test
+}
+
+resolve_pvalue_correction_method <- function(correction_method) {
+  method <- tolower(as.character(correction_method)[1])
+
+  if (is.na(method) || !nzchar(method)) {
+    method <- "FDR"
+  }
+
+  valid_methods <- c("raw", "fdr", "bonferroni", "holm", "hochberg", "hommel", "by")
+  if (!tolower(method) %in% valid_methods) {
+    warning("Invalid pvalue_correction_method: ", method, ". Falling back to 'FDR'.")
+    method <- "FDR"
+  }
+
+  # Map "raw" to appropriate method for p.adjust
+  if (identical(tolower(method), "raw")) {
+    return("none")
+  }
+
+  # Ensure proper capitalization for p.adjust
+  switch(tolower(method),
+    "fdr" = "BH",
+    "bonferroni" = "bonferroni",
+    "holm" = "holm",
+    "hochberg" = "hochberg",
+    "hommel" = "hommel",
+    "by" = "BY",
+    "BH"
+  )
+}
+
+perform_statistical_test <- function(x, y, test_type = "student", paired = FALSE) {
+  test_type <- tolower(test_type)
+
+  x <- x[is.finite(x)]
+  y <- y[is.finite(y)]
+
+  if (length(x) < 2 || length(y) < 2) {
+    return(list(p_value = NA_real_, test_type_used = test_type, error = "Insufficient data"))
+  }
+
+  if (identical(test_type, "student")) {
+    result <- tryCatch(
+      {
+        t <- t.test(y, x, var.equal = TRUE, paired = paired)
+        list(p_value = as.numeric(t$p.value), test_type_used = "student", error = NULL)
+      },
+      error = function(e) {
+        list(p_value = NA_real_, test_type_used = "student", error = as.character(e))
+      }
+    )
+    return(result)
+  }
+
+  if (identical(test_type, "welch")) {
+    result <- tryCatch(
+      {
+        t <- t.test(y, x, var.equal = FALSE, paired = paired)
+        list(p_value = as.numeric(t$p.value), test_type_used = "welch", error = NULL)
+      },
+      error = function(e) {
+        list(p_value = NA_real_, test_type_used = "welch", error = as.character(e))
+      }
+    )
+    return(result)
+  }
+
+  if (identical(test_type, "wilcoxon")) {
+    result <- tryCatch(
+      {
+        w <- wilcox.test(y, x, paired = paired, exact = FALSE)
+        list(p_value = as.numeric(w$p.value), test_type_used = "wilcoxon", error = NULL)
+      },
+      error = function(e) {
+        list(p_value = NA_real_, test_type_used = "wilcoxon", error = as.character(e))
+      }
+    )
+    return(result)
+  }
+
+  if (identical(test_type, "limma")) {
+    # Limma requires a different approach - we'll use it only if available and data permits
+    if (!requireNamespace("limma", quietly = TRUE)) {
+      warning("Limma package not available. Falling back to Welch's t-test.")
+      return(perform_statistical_test(x, y, test_type = "welch", paired = paired))
+    }
+
+    result <- tryCatch(
+      {
+        # Create design matrix for limma
+        group <- factor(c(rep("den", length(x)), rep("num", length(y))))
+        design <- model.matrix(~group)
+
+        # Combine data
+        y_combined <- c(x, y)
+
+        # Fit linear model
+        fit <- limma::lmFit(matrix(y_combined, ncol = 1), design)
+        fit <- limma::eBayes(fit)
+
+        # Extract p-value from the coefficient (second column, treatment effect)
+        p_val <- fit$p.value[1, 2]
+
+        list(p_value = as.numeric(p_val), test_type_used = "limma", error = NULL)
+      },
+      error = function(e) {
+        # Fallback to Welch if limma fails
+        list(p_value = NA_real_, test_type_used = "limma", error = as.character(e))
+      }
+    )
+    return(result)
+  }
+
+  # Default fallback
+  list(p_value = NA_real_, test_type_used = test_type, error = "Unknown test type")
 }
 
 # compute_ttest_stats_general(): Computes fold changes, log2 fold changes, p-values, FDR, 
-# and variance equality for a specified comparison between groups in the metadata. 
+# for a specified comparison between groups in the metadata. 
 # It returns a data frame with these statistics along with feature information.
+# Supports multiple statistical test types: Student's t-test, Welch's t-test, Wilcoxon rank-sum test, and limma.
 compute_ttest_stats_general <- function(mat_log2, mat_prelog, meta_sub, feat_info,
                                         compare_var = c("group", "sex"),
-                                        num_level, den_level) {
+                                        num_level, den_level,
+                                        statistical_test_type = "student",
+                                        test_is_paired = FALSE,
+                                        pvalue_correction_method = "FDR") {
   compare_var <- match.arg(compare_var)
+  statistical_test_type <- resolve_statistical_test_type(statistical_test_type)
+  pvalue_correction_method <- resolve_pvalue_correction_method(pvalue_correction_method)
 
   meta_sub <- meta_sub %>%
     filter(sample %in% rownames(mat_log2), sample %in% rownames(mat_prelog)) %>%
@@ -110,8 +228,6 @@ compute_ttest_stats_general <- function(mat_log2, mat_prelog, meta_sub, feat_inf
   log2FC <- log2(fc)
 
   pvals <- rep(NA_real_, ncol(sub_log2))
-  var_equal_p <- rep(NA_real_, ncol(sub_log2))
-  var_equal <- rep(NA, ncol(sub_log2))
 
   for (j in seq_len(ncol(sub_log2))) {
     x <- sub_log2[v2 == den_level, j]
@@ -120,28 +236,39 @@ compute_ttest_stats_general <- function(mat_log2, mat_prelog, meta_sub, feat_inf
     if (all(is.na(x)) || all(is.na(y))) next
     if (length(unique(na.omit(c(x, y)))) < 2) next
 
-    vt <- safe_var_equal_test(x, y)
-    var_equal_p[j] <- vt$p
-    var_equal[j] <- vt$var_equal
-
-    ve <- if (isTRUE(vt$var_equal)) TRUE else FALSE
-    pvals[j] <- tryCatch(
-      t.test(y, x, var.equal = ve)$p.value,
-      error = function(e) NA_real_
+    test_result <- perform_statistical_test(
+      x = x,
+      y = y,
+      test_type = statistical_test_type,
+      paired = test_is_paired
     )
+
+    pvals[j] <- test_result$p_value
   }
 
-  fdr <- p.adjust(pvals, method = "BH")
+  # Apply p-value correction method
+  adjusted_pvals <- if (identical(pvalue_correction_method, "none")) {
+    pvals
+  } else {
+    p.adjust(pvals, method = pvalue_correction_method)
+  }
 
-  tibble(
+  result_df <- tibble(
     featureID = colnames(sub_log2),
     FC_num_over_den = as.numeric(fc),
     log2FC_num_over_den = as.numeric(log2FC),
     p_value = pvals,
-    FDR = fdr,
-    var_equal_p = as.numeric(var_equal_p),
-    var_equal = as.logical(var_equal)
-  ) %>%
+    FDR = adjusted_pvals
+  )
+
+  # If correction method is "none" (raw p-values), add FDR column for compatibility
+  if (identical(pvalue_correction_method, "none")) {
+    # Compute BH FDR for compatibility even when not used for significance
+    result_df <- result_df %>%
+      mutate(FDR_BH = p.adjust(p_value, method = "BH"))
+  }
+
+  result_df %>%
     left_join(
       feat_info %>%
         select(
@@ -158,12 +285,22 @@ compute_ttest_stats_general <- function(mat_log2, mat_prelog, meta_sub, feat_inf
 # plot_volcano_metric(): Generates a volcano plot for a given metric (FDR or p-value) using ggplot2.
 plot_volcano_metric <- function(stats_df, title, out_path,
                                 metric = c("FDR", "p_value"),
-                                alpha = alpha_sig,
+                                alpha = p_value_cutoff,
+                                fdr_alpha = fdr_cutoff,
                                 fc_cutoff_log2 = fc_cutoff_log2,
                                 xlab = "log2FC",
                                 style = "classic") {
   metric <- match.arg(metric)
   style <- resolve_volcano_styles(style)[1]
+
+  # Determine which alpha to use depending on the metric plotted
+  alpha_used <- if (identical(metric, "FDR")) {
+    # use the FDR cutoff when plotting FDR
+    fdr_alpha
+  } else {
+    # default: p-value cutoff
+    alpha
+  }
 
   if (is.null(stats_df) || nrow(stats_df) == 0) {
     stop("stats_df is NULL or empty.")
@@ -194,11 +331,11 @@ plot_volcano_metric <- function(stats_df, title, out_path,
       # ---------------------------------------------------------
       regulation = dplyr::case_when(
         !is.na(metric_val) &
-          metric_val < alpha &
+          metric_val < alpha_used &
           !is.na(log2FC_num_over_den) &
           log2FC_num_over_den >= fc_cutoff_log2 ~ "Up",
         !is.na(metric_val) &
-          metric_val < alpha &
+          metric_val < alpha_used &
           !is.na(log2FC_num_over_den) &
           log2FC_num_over_den <= -fc_cutoff_log2 ~ "Down",
         TRUE ~ "Normal"
@@ -210,10 +347,10 @@ plot_volcano_metric <- function(stats_df, title, out_path,
   # Labels only for points that pass BOTH significance and FC cutoff
   # -------------------------------------------------------------
   df_labels <- df %>%
-    dplyr::filter(
+      dplyr::filter(
       !is.na(metric_val),
       !is.na(log2FC_num_over_den),
-      metric_val < alpha,
+      metric_val < alpha_used,
       abs(log2FC_num_over_den) >= fc_cutoff_log2
     ) %>%
     dplyr::arrange(metric_val, dplyr::desc(abs(log2FC_num_over_den)))
@@ -244,7 +381,7 @@ plot_volcano_metric <- function(stats_df, title, out_path,
     max_abs_x <- max_abs_x * (1 + volcano_axis_expand_mult)
   }
 
-  sig_y <- -log10(alpha)
+  sig_y <- -log10(alpha_used)
   max_y <- if (length(y_vals) > 0) max(y_vals, na.rm = TRUE) else 1
   max_y <- max(max_y, sig_y, 1)
   if (isTRUE(volcano_auto_axis)) {
@@ -427,7 +564,7 @@ plot_volcano_metric <- function(stats_df, title, out_path,
       point.padding = 0.20,
       segment.color = "grey40",
       segment.size = 0.30,
-      max.overlaps = 100,
+      max.overlaps = Inf,
       min.segment.length = 0,
       show.legend = FALSE
     ) +
@@ -438,12 +575,17 @@ plot_volcano_metric <- function(stats_df, title, out_path,
     ) +
     ggplot2::labs(
       title = title,
+      subtitle = paste0(if (identical(metric, "FDR")) {
+        paste0("Cutoff: FDR < ", fdr_alpha)
+      } else {
+        paste0("Cutoff: p-value < ", alpha)
+      }),
       x = xlab,
       y = paste0("-log10(", metric, ")")
     ) +
     ggplot2::theme_minimal(base_size = 14) +
     ggplot2::theme(
-      plot.title = ggplot2::element_text(face = "bold", size = 16),
+      plot.title = ggplot2::element_text(face = "bold", size = 10),
       axis.title = ggplot2::element_text(face = "bold", size = 13),
       legend.title = ggplot2::element_text(face = "bold"),
       panel.grid.minor = ggplot2::element_blank(),
@@ -492,46 +634,62 @@ save_placeholder_volcano <- function(out_path, title, reason) {
 # creates volcano plots for specified metrics (FDR, p-value, FDR_and_p_value). 
 # It handles cases with insufficient samples gracefully by saving placeholder volcano plots with explanations.
 run_all_stats_5sets_per_model <- function(mat_log2, mat_prelog, metadata_aligned, feat_info, paths,
-                                          alpha_sig = 0.05, fc_cutoff_log2 = 1,
+                                          p_value_cutoff = p_value_cutoff, fdr_cutoff = fdr_cutoff, fc_cutoff_log2 = fc_cutoff_log2,
                                           run_metrics = run_metrics,
                                           make_volcano_plots = TRUE,
                                           volcano_style = volcano_style,
-                                          comparison_configs = COMPARISON_CONFIGS) {
+                                          comparison_configs = COMPARISON_CONFIGS,
+                                          statistical_test_type = "student",
+                                          test_is_paired = FALSE,
+                                          pvalue_correction_method = "FDR") {
   metrics <- normalize_metric_modes(run_metrics)
   styles_to_export <- resolve_volcano_styles(volcano_style)
   models <- sort(unique(metadata_aligned$model[metadata_aligned$type == "Sample"]))
   out <- list()
 
   get_volcano_dir <- function(prefix, mp) {
-    if (prefix %in% c("tg_vs_wt", "tg-vs-wt")) {
+    # Accept both legacy lowercase prefixes and comparison-config uppercase prefixes
+    if (prefix %in% c("ALL", "tg_vs_wt", "tg-vs-wt", "ALL_TGvsWT")) {
       return(mp$plots$volcano_tg_vs_wt)
     }
-    if (prefix %in% c("f_vs_m", "f-vs-m")) {
-      return(mp$plots$volcano_f_vs_m)
-    }
-    if (prefix %in% c("tg-f_vs_wt-f", "tg_f_vs_wt_f")) {
+    if (prefix %in% c("sex", "tg-f_vs_wt-f", "tg_f_vs_wt_f", "tg-m_vs_wt-m", "tg_m_vs_wt_m", "F_TGvsWT", "M_TGvsWT")) {
       return(mp$plots$volcano_by_sex)
     }
-    if (prefix %in% c("tg-m_vs_wt-m", "tg_m_vs_wt_m")) {
-      return(mp$plots$volcano_by_sex)
+    if (prefix %in% c("sex_FvsM", "tg-f_vs_tg-m", "tg_f_vs_tg_m", "TG_FvsM")) {
+      return(mp$plots$volcano_tg_f_vs_tg_m)
     }
-    if (prefix %in% c("tg-f_vs_tg-m", "tg_f_vs_tg_m")) {
-      return(mp$plots$volcano_by_group)
+    if (prefix %in% c("wt-f_vs_wt-m", "wt_f_vs_wt_m", "WT_FvsM")) {
+      return(mp$plots$volcano_wt_f_vs_wt_m)
     }
-    if (prefix %in% c("wt-f_vs_wt-m", "wt_f_vs_wt_m")) {
-      return(mp$plots$volcano_by_group)
-    }
+
+    # fallback: try lowercase-normalized prefix
+    np <- tolower(prefix)
+    if (np %in% c("all", "tg_vs_wt", "tg-vs-wt")) return(mp$plots$volcano_tg_vs_wt)
+    if (np %in% c("sex", "tg-f_vs_wt-f", "tg_f_vs_wt_f", "tg-m_vs_wt-m", "tg_m_vs_wt_m")) return(mp$plots$volcano_by_sex)
+    if (np %in% c("sex_fvsm", "tg-f_vs_tg-m", "tg_f_vs_tg_m")) return(mp$plots$volcano_tg_f_vs_tg_m)
+    if (np %in% c("wt-f_vs_wt-m", "wt_f_vs_wt_m")) return(mp$plots$volcano_wt_f_vs_wt_m)
+
     stop("Unknown comparison prefix: ", prefix)
   }
 
   for (m in models) {
     mp <- get_model_paths(paths, m)
     meta_m <- metadata_aligned %>% filter(type == "Sample", model == m)
+    model_groups <- resolve_model_group_values(m)
+    message("  - Stats model groups: model=", m, " | control=", model_groups$control, " | treatment=", model_groups$treatment)
+    message("    - Test type: ", statistical_test_type, " | Paired: ", test_is_paired, " | P-value correction: ", pvalue_correction_method)
     out[[m]] <- list()
 
     for (comp_name in names(comparison_configs)) {
       cfg <- comparison_configs[[comp_name]]
-      meta_sub <- cfg$meta_filter(meta_m)
+      meta_sub <- cfg$meta_filter(meta_m, model_name = m)
+
+      compare_den <- cfg$stats_den
+      compare_num <- cfg$stats_num
+      if (identical(cfg$stats_compare_var, "group")) {
+        compare_den <- model_groups$control
+        compare_num <- model_groups$treatment
+      }
 
       st <- compute_ttest_stats_general(
         mat_log2 = mat_log2,
@@ -539,8 +697,11 @@ run_all_stats_5sets_per_model <- function(mat_log2, mat_prelog, metadata_aligned
         meta_sub = meta_sub,
         feat_info = feat_info,
         compare_var = cfg$stats_compare_var,
-        num_level = cfg$stats_num,
-        den_level = cfg$stats_den
+        num_level = compare_num,
+        den_level = compare_den,
+        statistical_test_type = statistical_test_type,
+        test_is_paired = test_is_paired,
+        pvalue_correction_method = pvalue_correction_method
       )
 
       out[[m]][[comp_name]] <- st
@@ -549,6 +710,16 @@ run_all_stats_5sets_per_model <- function(mat_log2, mat_prelog, metadata_aligned
 
       for (met in metrics) {
         out_dir <- get_volcano_dir(cfg$prefix, mp)
+
+        comp_label <- switch(
+          comp_name,
+          ALL_TGvsWT = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=ALL"),
+          F_TGvsWT = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=F"),
+          M_TGvsWT = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=M"),
+          TG_FvsM = paste0("F vs M within ", model_groups$treatment),
+          WT_FvsM = paste0("F vs M within ", model_groups$control),
+          cfg$label
+        )
 
         for (style_name in styles_to_export) {
           base_name <- paste0("volcano_ACTIVE_model_", m, "_", comp_name, "_metric_", met)
@@ -562,9 +733,9 @@ run_all_stats_5sets_per_model <- function(mat_log2, mat_prelog, metadata_aligned
 
           title <- paste0(
             "Volcano (", style_name, ") | model=", m,
-            " | ", cfg$label,
+            " | ", comp_label,
             " | metric=", met,
-            " | log2FC=log2(", cfg$stats_num, "/", cfg$stats_den, ")"
+            " | log2FC=log2(", compare_num, "/", compare_den, ")"
           )
 
           if (is.null(st) || nrow(st) == 0) {
@@ -583,7 +754,8 @@ run_all_stats_5sets_per_model <- function(mat_log2, mat_prelog, metadata_aligned
                 title = title,
                 out_path = out_path,
                 metric = met,
-                alpha = alpha_sig,
+                alpha = p_value_cutoff,
+                fdr_alpha = fdr_cutoff,
                 fc_cutoff_log2 = fc_cutoff_log2,
                 style = style_name
               )
@@ -607,11 +779,26 @@ run_all_stats_5sets_per_model <- function(mat_log2, mat_prelog, metadata_aligned
   out
 }
 
-# export_stats_excel_by_model(): Saves the computed statistics for each model in an Excel workbook 
+# export_stats_excel_by_model() exports the computed statistics for each model in an Excel workbook 
 # with conditional formatting to highlight significant results.
-export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, fc_cutoff_log2,
-                                        active_variant, log_path = NULL) {
+export_stats_excel_by_model <- function(stats_5sets_by_model, paths, p_value_cutoff, fdr_cutoff, fc_cutoff_log2,
+                                        active_variant, log_path = NULL,
+                                        statistical_test_type = "student",
+                                        test_is_paired = FALSE,
+                                        pvalue_correction_method = "FDR") {
   comparisons <- COMPARISON_NAMES
+
+  pretty_comparison_label <- function(comp_name, model_name, model_groups) {
+    switch(
+      comp_name,
+      ALL_TGvsWT = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=ALL | model=", model_name),
+      F_TGvsWT = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=F | model=", model_name),
+      M_TGvsWT = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=M | model=", model_name),
+      TG_FvsM = paste0("F vs M within ", model_groups$treatment, " | model=", model_name),
+      WT_FvsM = paste0("F vs M within ", model_groups$control, " | model=", model_name),
+      comp_name
+    )
+  }
 
   col_idx <- function(df, colname) {
     idx <- match(colname, names(df))
@@ -628,15 +815,24 @@ export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, 
 
     wb <- openxlsx::createWorkbook()
 
+    # Get model-specific group values
+    model_groups <- resolve_model_group_values(m)
+
     readme <- tibble(
       field = c(
-        "model", "ACTIVE_variant", "alpha_sig", "fc_cutoff_log2",
-        "log2FC_definition", "stats_definition", "significance_logic"
+        "model", "Control group (WT)", "Treatment group (TG)", "Active_variant", "p_value_cutoff", "fdr_cutoff", "fc_cutoff_log2",
+        "log2FC_definition", "Statistical_test", "Test_paired", "P_value_correction", "stats_definition", "significance_logic"
       ),
       value = c(
-        m, active_variant, alpha_sig, fc_cutoff_log2,
+        m, model_groups$control, model_groups$treatment, active_variant, p_value_cutoff, fdr_cutoff, fc_cutoff_log2,
         "log2FC = log2(mean(num_prelog)/mean(den_prelog)); for FvsM: log2(F/M)",
-        "t-test on log2 matrix; var.equal if var.test suggests equal variances else Welch; BH correction per comparison",
+        statistical_test_type,
+        as.character(test_is_paired),
+        pvalue_correction_method,
+        paste0(
+          "Test=", statistical_test_type, " (paired=", test_is_paired, "); ",
+          "Correction method=", pvalue_correction_method
+        ),
         "yellow row = (p_value<alpha OR FDR<alpha); green row = yellow row AND |log2FC|>=cutoff; red cell = p_value or FDR < alpha"
       )
     )
@@ -645,6 +841,7 @@ export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, 
     openxlsx::writeData(wb, "README", readme)
 
     tabs <- stats_5sets_by_model[[m]]
+    sig_rows <- list()
 
     for (nm in comparisons) {
       df <- tabs[[nm]]
@@ -662,8 +859,14 @@ export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, 
           log2FC = log2FC_num_over_den
         ) %>%
         mutate(
-          row_sig_p = as.integer(!is.na(p_value) & p_value < alpha_sig),
-          row_sig_fdr = as.integer(!is.na(FDR) & FDR < alpha_sig),
+          up_down = dplyr::case_when(
+            is.na(log2FC) ~ NA_character_,
+            log2FC > 0 ~ "Up",
+            log2FC < 0 ~ "Down",
+            TRUE ~ "Flat"
+          ),
+          row_sig_p = as.integer(!is.na(p_value) & p_value < p_value_cutoff),
+          row_sig_fdr = as.integer(!is.na(FDR) & FDR < fdr_cutoff),
           row_sig_any = as.integer(row_sig_p == 1 | row_sig_fdr == 1),
           row_sig_and_fc = as.integer(
             row_sig_any == 1 &
@@ -709,7 +912,7 @@ export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, 
 
       p_col <- col_idx(df_clean, "p_value")
       if (!is.na(p_col)) {
-        p_rows <- which(!is.na(df_clean$p_value) & df_clean$p_value < alpha_sig) + 1
+        p_rows <- which(!is.na(df_clean$p_value) & df_clean$p_value < p_value_cutoff) + 1
         if (length(p_rows) > 0) {
           openxlsx::addStyle(
             wb, nm,
@@ -724,7 +927,7 @@ export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, 
 
       fdr_col <- col_idx(df_clean, "FDR")
       if (!is.na(fdr_col)) {
-        fdr_rows <- which(!is.na(df_clean$FDR) & df_clean$FDR < alpha_sig) + 1
+        fdr_rows <- which(!is.na(df_clean$FDR) & df_clean$FDR < fdr_cutoff) + 1
         if (length(fdr_rows) > 0) {
           openxlsx::addStyle(
             wb, nm,
@@ -754,6 +957,33 @@ export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, 
       if (length(helper_cols) > 0) {
         openxlsx::setColWidths(wb, nm, cols = helper_cols, widths = 0)
       }
+      # collect significant rows for aggregated sheet
+      sig_subset <- df_clean[df_clean$row_sig_any == 1, , drop = FALSE]
+      if (nrow(sig_subset) > 0) {
+        sig_subset$comparison <- pretty_comparison_label(
+          comp_name = nm,
+          model_name = m,
+          model_groups = model_groups
+        )
+        sig_rows[[length(sig_rows) + 1]] <- sig_subset
+      }
+    }
+
+    # aggregated sheet of significant features across comparisons
+    openxlsx::addWorksheet(wb, "Significant")
+    if (length(sig_rows) == 0) {
+      openxlsx::writeData(wb, "Significant", tibble::tibble(note = "No significant features found for this model"))
+    } else {
+      agg <- tryCatch({ do.call(rbind, sig_rows) }, error = function(e) NULL)
+      if (is.null(agg) || nrow(agg) == 0) {
+        openxlsx::writeData(wb, "Significant", tibble::tibble(note = "No significant features found for this model"))
+      } else {
+        # move comparison and direction columns to front
+        cols <- c("comparison", "up_down", setdiff(names(agg), c("comparison", "up_down")))
+        agg <- agg[, intersect(cols, names(agg)), drop = FALSE]
+        openxlsx::writeData(wb, "Significant", agg)
+        openxlsx::freezePane(wb, "Significant", firstRow = TRUE)
+      }
     }
 
     openxlsx::setColWidths(wb, "README", cols = 1:2, widths = "auto")
@@ -774,7 +1004,7 @@ export_stats_excel_by_model <- function(stats_5sets_by_model, paths, alpha_sig, 
 
 # export_significant_metabolites_txt_by_model(): Writes one TXT list per comparison
 # in metric-specific folders instead of mixing p_value and FDR.
-export_significant_metabolites_txt_by_model <- function(stats_5sets_by_model, paths, alpha_sig,
+export_significant_metabolites_txt_by_model <- function(stats_5sets_by_model, paths, p_value_cutoff, fdr_cutoff,
                                                         fc_cutoff_log2, active_variant,
                                                         log_path = NULL,
                                                         require_fc_cutoff = FALSE) {
@@ -784,10 +1014,6 @@ export_significant_metabolites_txt_by_model <- function(stats_5sets_by_model, pa
   for (m in names(stats_5sets_by_model)) {
     mp <- get_model_paths(paths, m)
     out_dir <- mp$exports$stats
-
-    for (metric_dir in metric_dirs) {
-      dir.create(file.path(out_dir, "significant_metabolites", metric_dir), recursive = TRUE, showWarnings = FALSE)
-    }
 
     tabs <- stats_5sets_by_model[[m]]
 
@@ -807,7 +1033,7 @@ export_significant_metabolites_txt_by_model <- function(stats_5sets_by_model, pa
         if (!is.null(df) && nrow(df) > 0) {
           out_names <- df %>%
             dplyr::mutate(
-              passes_metric = !is.na(.data[[metric]]) & .data[[metric]] < alpha_sig,
+              passes_metric = !is.na(.data[[metric]]) & .data[[metric]] < p_value_cutoff,
               passes_fc_cutoff = !is.na(log2FC_num_over_den) & abs(log2FC_num_over_den) >= fc_cutoff_log2,
               primary_name = dplyr::na_if(trimws(as.character(Name)), "")
             ) %>%
@@ -821,6 +1047,7 @@ export_significant_metabolites_txt_by_model <- function(stats_5sets_by_model, pa
         }
 
         if (length(out_names) > 0) {
+          dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
           readr::write_lines(out_names, out_path)
 
           if (!is.null(log_path)) {
@@ -832,7 +1059,8 @@ export_significant_metabolites_txt_by_model <- function(stats_5sets_by_model, pa
                 "Significant metabolites list export | model=", m,
                 " | comparison=", nm,
                 " | metric=", metric,
-                " | alpha=", alpha_sig,
+                " | p_value_cutoff=", p_value_cutoff,
+                " | fdr_cutoff=", fdr_cutoff,
                 " | fc_cutoff_log2=", fc_cutoff_log2,
                 " | require_fc_cutoff=", require_fc_cutoff,
                 " | active_variant=", active_variant

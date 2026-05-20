@@ -71,6 +71,88 @@ prepare_matrix_for_pca <- function(mat) {
   mat2
 }
 
+pca_legend_title <- function(var_name) {
+  switch(
+    var_name,
+    group = "Group",
+    sex = "Sex",
+    tools::toTitleCase(gsub("_", " ", as.character(var_name)))
+  )
+}
+
+pca_color_values <- function(var_name, levels, model_name = NULL) {
+  levels <- as.character(levels)
+  levels <- levels[!is.na(levels) & nzchar(levels)]
+
+  if (length(levels) == 0) {
+    return(c(ALL = "#6B7280"))
+  }
+
+  vals <- setNames(rep("#6B7280", length(levels)), levels)
+
+  if (identical(var_name, "group")) {
+    groups <- resolve_model_group_values(model_name)
+
+    # Blue for control and orange for treatment, keeping the order stable across models.
+    ctrl_idx <- which(tolower(levels) == tolower(groups$control))[1]
+    trt_idx <- which(tolower(levels) == tolower(groups$treatment))[1]
+
+    if (!is.na(ctrl_idx)) vals[ctrl_idx] <- "#4EEE94"
+    if (!is.na(trt_idx)) vals[trt_idx] <- "#FFA54F"
+
+    remaining <- which(vals == "#6B7280")
+    fallback <- c("#14B8A6", "#A855F7", "#EF4444", "#22C55E")
+    if (length(remaining) > 0) {
+      vals[remaining] <- rep_len(fallback, length(remaining))
+    }
+
+    return(vals)
+  }
+
+  if (identical(var_name, "sex")) {
+    female_idx <- which(tolower(levels) == "f")[1]
+    male_idx <- which(tolower(levels) == "m")[1]
+
+    if (!is.na(female_idx)) vals[female_idx] <- "#CD0000"
+    if (!is.na(male_idx)) vals[male_idx] <- "#009ACD"
+
+    remaining <- which(vals == "#6B7280")
+    fallback <- c("#6366F1", "#EC4899", "#16A34A")
+    if (length(remaining) > 0) {
+      vals[remaining] <- rep_len(fallback, length(remaining))
+    }
+
+    return(vals)
+  }
+
+  fallback <- c("#2563EB", "#F97316", "#14B8A6", "#A855F7")
+  vals[] <- rep_len(fallback, length(levels))
+  vals
+}
+
+pca_shape_values <- function(var_name, levels) {
+  levels <- as.character(levels)
+  levels <- levels[!is.na(levels) & nzchar(levels)]
+
+  if (length(levels) == 0) {
+    return(c(ALL = 16))
+  }
+
+  vals <- setNames(rep(16, length(levels)), levels)
+
+  if (identical(var_name, "sex")) {
+    female_idx <- which(tolower(levels) == "f")[1]
+    male_idx <- which(tolower(levels) == "m")[1]
+    if (!is.na(female_idx)) vals[female_idx] <- 16
+    if (!is.na(male_idx)) vals[male_idx] <- 17
+  } else {
+    shape_seq <- c(16, 17, 15, 18, 8, 3, 7)
+    vals <- setNames(rep_len(shape_seq, length(levels)), levels)
+  }
+
+  vals
+}
+
 # -----------------------------------------------------------------------------
 # Draw and save one PCA plot
 # -----------------------------------------------------------------------------
@@ -81,6 +163,9 @@ plot_one_pca_subset <- function(mat_log2 = mat_log2,
                                 pca_scaling = pca_scaling,
                                 color_var = "group",
                                 shape_var = "sex",
+                                ellipse_color_var = NULL,
+                                draw_ellipse = TRUE,
+                                ellipse_positive = TRUE,
                                 log_path = NULL) {
   meta <- meta %>%
     dplyr::filter(sample %in% rownames(mat_log2)) %>%
@@ -127,36 +212,188 @@ plot_one_pca_subset <- function(mat_log2 = mat_log2,
   if (!(color_var %in% names(scores))) {
     scores[[color_var]] <- "ALL"
   }
-  if (!(shape_var %in% names(scores))) {
+  if (!is.null(shape_var) && length(shape_var) > 0 && !(shape_var %in% names(scores))) {
     scores[[shape_var]] <- "ALL"
   }
 
-  scores[[color_var]] <- as.factor(scores[[color_var]])
-  scores[[shape_var]] <- as.factor(scores[[shape_var]])
+  model_name <- if ("model" %in% names(meta) && length(unique(meta$model)) >= 1) unique(meta$model)[1] else NULL
 
-  p <- ggplot2::ggplot(
-    scores,
-    ggplot2::aes(
-      x = PC1,
-      y = PC2,
-      color = .data[[color_var]],
-      shape = .data[[shape_var]]
+  scores[[color_var]] <- as.factor(scores[[color_var]])
+  if (!is.null(shape_var) && length(shape_var) > 0) {
+    scores[[shape_var]] <- as.factor(scores[[shape_var]])
+  }
+
+  if (identical(color_var, "group")) {
+    groups <- resolve_model_group_values(model_name)
+    lvl <- levels(scores[[color_var]])
+    ordered <- c(groups$control, groups$treatment)
+    ordered <- ordered[ordered %in% lvl]
+    ordered <- c(ordered, setdiff(lvl, ordered))
+    scores[[color_var]] <- factor(scores[[color_var]], levels = ordered)
+  } else if (identical(color_var, "sex")) {
+    lvl <- levels(scores[[color_var]])
+    ordered <- c("F", "M")
+    ordered <- ordered[ordered %in% lvl]
+    ordered <- c(ordered, setdiff(lvl, ordered))
+    scores[[color_var]] <- factor(scores[[color_var]], levels = ordered)
+  }
+
+  color_breaks <- levels(scores[[color_var]])
+  color_values <- pca_color_values(color_var, color_breaks, model_name = model_name)
+
+  # determine which variable should provide ellipse colors (allow separate mapping)
+  ellipse_var <- if (!is.null(ellipse_color_var) && nzchar(as.character(ellipse_color_var))) ellipse_color_var else color_var
+  if (!(ellipse_var %in% names(scores))) {
+    scores[[ellipse_var]] <- scores[[color_var]]
+  }
+  scores[[ellipse_var]] <- as.factor(scores[[ellipse_var]])
+
+  if (identical(ellipse_var, "group")) {
+    groups <- resolve_model_group_values(model_name)
+    lvl <- levels(scores[[ellipse_var]])
+    ordered <- c(groups$control, groups$treatment)
+    ordered <- ordered[ordered %in% lvl]
+    ordered <- c(ordered, setdiff(lvl, ordered))
+    scores[[ellipse_var]] <- factor(scores[[ellipse_var]], levels = ordered)
+  } else if (identical(ellipse_var, "sex")) {
+    lvl <- levels(scores[[ellipse_var]])
+    ordered <- c("F", "M")
+    ordered <- ordered[ordered %in% lvl]
+    ordered <- c(ordered, setdiff(lvl, ordered))
+    scores[[ellipse_var]] <- factor(scores[[ellipse_var]], levels = ordered)
+  }
+
+  ellipse_breaks <- levels(scores[[ellipse_var]])
+  ellipse_values <- pca_color_values(ellipse_var, ellipse_breaks, model_name = model_name)
+
+  # If ellipses should only be drawn for 'positive' case and the flag is FALSE,
+  # when coloring by sex we prefer black points and rely on shape to distinguish sex.
+  if (identical(color_var, "sex") && isFALSE(ellipse_positive)) {
+    color_values[] <- "#000000"
+  }
+
+  if (!is.null(shape_var) && length(shape_var) > 0) {
+    if (identical(shape_var, "group")) {
+      groups <- resolve_model_group_values(model_name)
+      lvl <- levels(scores[[shape_var]])
+      ordered <- c(groups$control, groups$treatment)
+      ordered <- ordered[ordered %in% lvl]
+      ordered <- c(ordered, setdiff(lvl, ordered))
+      scores[[shape_var]] <- factor(scores[[shape_var]], levels = ordered)
+    } else if (identical(shape_var, "sex")) {
+      lvl <- levels(scores[[shape_var]])
+      ordered <- c("F", "M")
+      ordered <- ordered[ordered %in% lvl]
+      ordered <- c(ordered, setdiff(lvl, ordered))
+      scores[[shape_var]] <- factor(scores[[shape_var]], levels = ordered)
+    }
+  }
+
+  if (is.null(shape_var) || length(shape_var) == 0) {
+    p <- ggplot2::ggplot(
+      scores,
+      ggplot2::aes(
+        x = PC1,
+        y = PC2,
+        color = .data[[color_var]]
+      )
+    ) +
+      ggplot2::geom_point(size = 3, alpha = 0.9) +
+      ggrepel::geom_text_repel(
+        ggplot2::aes(label = sample),
+        show.legend = FALSE,
+        max.overlaps = 20
+      ) +
+      ggplot2::labs(
+        title = title_main,
+        x = paste0("PC1 (", pc1, "%)"),
+        y = paste0("PC2 (", pc2, "%)"),
+        color = pca_legend_title(color_var)
+      ) +
+      ggplot2::theme_minimal()
+
+    p <- p + ggplot2::scale_color_manual(
+      values = color_values,
+      breaks = color_breaks,
+      drop = TRUE
     )
-  ) +
-    ggplot2::geom_point(size = 3, alpha = 0.9) +
-    ggrepel::geom_text_repel(
-      ggplot2::aes(label = sample),
-      show.legend = FALSE,
-      max.overlaps = 20
+    # add filled group ellipses if requested and group sizes allow
+    if (isTRUE(draw_ellipse) && isTRUE(ellipse_positive)) {
+      grp_counts <- table(scores[[color_var]])
+      valid_grps <- names(grp_counts[grp_counts >= 3])
+      if (length(valid_grps) > 0) {
+        ell_data <- scores[scores[[color_var]] %in% valid_grps, , drop = FALSE]
+        p <- p + ggplot2::stat_ellipse(
+          data = ell_data,
+          mapping = ggplot2::aes(x = PC1, y = PC2, fill = .data[[ellipse_var]], group = .data[[ellipse_var]]),
+          inherit.aes = FALSE,
+          geom = "polygon",
+          alpha = 0.15,
+          level = 0.95,
+          show.legend = TRUE,
+          type = "t"
+        )
+        p <- p + ggplot2::scale_fill_manual(values = ellipse_values, breaks = ellipse_breaks, name = paste0(pca_legend_title(ellipse_var), " (ellipse)"))
+      }
+    }
+  } else {
+    p <- ggplot2::ggplot(
+      scores,
+      ggplot2::aes(
+        x = PC1,
+        y = PC2,
+        color = .data[[color_var]],
+        shape = .data[[shape_var]]
+      )
     ) +
-    ggplot2::labs(
-      title = title_main,
-      x = paste0("PC1 (", pc1, "%)"),
-      y = paste0("PC2 (", pc2, "%)"),
-      color = color_var,
-      shape = shape_var
+      ggplot2::geom_point(size = 3, alpha = 0.9) +
+      ggrepel::geom_text_repel(
+        ggplot2::aes(label = sample),
+        show.legend = FALSE,
+        max.overlaps = 20
+      ) +
+      ggplot2::labs(
+        title = title_main,
+        x = paste0("PC1 (", pc1, "%)"),
+        y = paste0("PC2 (", pc2, "%)"),
+        color = pca_legend_title(color_var),
+        shape = pca_legend_title(shape_var)
+      ) +
+      ggplot2::theme_minimal()
+
+    shape_breaks <- levels(scores[[shape_var]])
+    shape_values <- pca_shape_values(shape_var, shape_breaks)
+
+    p <- p + ggplot2::scale_color_manual(
+      values = color_values,
+      breaks = color_breaks,
+      drop = TRUE
     ) +
-    ggplot2::theme_minimal()
+      ggplot2::scale_shape_manual(
+        values = shape_values,
+        breaks = shape_breaks,
+        drop = TRUE
+      )
+    # add filled group ellipses if requested and group sizes allow
+    if (isTRUE(draw_ellipse) && isTRUE(ellipse_positive)) {
+      grp_counts <- table(scores[[color_var]])
+      valid_grps <- names(grp_counts[grp_counts >= 3])
+      if (length(valid_grps) > 0) {
+        ell_data <- scores[scores[[color_var]] %in% valid_grps, , drop = FALSE]
+        p <- p + ggplot2::stat_ellipse(
+          data = ell_data,
+          mapping = ggplot2::aes(x = PC1, y = PC2, fill = .data[[ellipse_var]], group = .data[[ellipse_var]]),
+          inherit.aes = FALSE,
+          geom = "polygon",
+          alpha = 0.12,
+          level = 0.95,
+          show.legend = TRUE,
+          type = "t"
+        )
+        p <- p + ggplot2::scale_fill_manual(values = ellipse_values, breaks = ellipse_breaks, name = paste0(pca_legend_title(ellipse_var), " (ellipse)"))
+      }
+    }
+  }
 
   dir.create(dirname(out_png), recursive = TRUE, showWarnings = FALSE)
 
@@ -188,16 +425,13 @@ plot_one_pca_subset <- function(mat_log2 = mat_log2,
 
 # -----------------------------------------------------------------------------
 # PCA driver
-# - one PCA per model
-# - one PCA per model restricted to WT
-# - one PCA per model restricted to TG
-# - one PCA per model restricted to F
-# - one PCA per model restricted to M
+# - one PCA per model for each comparison defined in COMPARISON_CONFIGS
 # -----------------------------------------------------------------------------
 plot_pca_per_model <- function(mat_log2 = mat_log2,
                                metadata_aligned = metadata_aligned,
                                paths = paths,
                                pca_scaling = pca_scaling,
+                               ellipse_positive = TRUE,
                                log_path = NULL) {
   
   models <- metadata_aligned %>%
@@ -206,21 +440,42 @@ plot_pca_per_model <- function(mat_log2 = mat_log2,
     unique() %>%
     sort()
   n_done <- 0
-  comparison_group_control <- get0("comparison_group_control", ifnotfound = "WT", inherits = TRUE)
-  comparison_group_treatment <- get0("comparison_group_treatment", ifnotfound = "TG", inherits = TRUE)
+
+  get_pca_dir_for_comparison <- function(prefix, mp) {
+    # accept both legacy lowercase-style prefixes and comparison config prefixes
+    if (prefix %in% c("tg_vs_wt", "tg-vs-wt", "ALL_TGvsWT", "ALL_TGvsWT")) {
+      return(mp$plots$pca_tg_vs_wt)
+    }
+    if (prefix %in% c("tg-f_vs_wt-f", "tg_f_vs_wt_f", "tg-m_vs_wt-m", "tg_m_vs_wt_m", "F_TGvsWT", "M_TGvsWT")) {
+      return(mp$plots$pca_by_sex)
+    }
+    if (prefix %in% c("tg-f_vs_tg-m", "tg_f_vs_tg_m", "TG_FvsM")) {
+      return(mp$plots$pca_tg_f_vs_tg_m)
+    }
+    if (prefix %in% c("wt-f_vs_wt-m", "wt_f_vs_wt_m", "WT_FvsM")) {
+      return(mp$plots$pca_wt_f_vs_wt_m)
+    }
+
+    # try lowercase-normalized fallback
+    np <- tolower(prefix)
+    if (np %in% c("tg_vs_wt", "tg-vs-wt")) return(mp$plots$pca_tg_vs_wt)
+    if (np %in% c("tg-f_vs_wt-f", "tg_f_vs_wt_f", "tg-m_vs_wt-m", "tg_m_vs_wt_m")) return(mp$plots$pca_by_sex)
+    if (np %in% c("tg-f_vs_tg-m", "tg_f_vs_tg_m")) return(mp$plots$pca_tg_f_vs_tg_m)
+    if (np %in% c("wt-f_vs_wt-m", "wt_f_vs_wt_m")) return(mp$plots$pca_wt_f_vs_wt_m)
+
+    stop("Unknown comparison prefix for PCA: ", prefix)
+  }
 
   for (m in models) {
     mp <- get_model_paths(paths, m)
+    model_groups <- resolve_model_group_values(m)
+    message("  - PCA model groups: model=", m, " | control=", model_groups$control, " | treatment=", model_groups$treatment)
 
-    # ensure PCA plot directories exist following the same organization as heatmap/volcano
-    pca_dirs <- c(
-      mp$plots$pca_global,
-      mp$plots$pca_by_sex,
-      mp$plots$pca_by_group,
-      mp$plots$pca_tg_vs_wt,
-      mp$plots$pca_f_vs_m,
-      mp$plots$pca_tg_f_vs_tg_m,
-      mp$plots$pca_wt_f_vs_wt_m
+    # ensure only the PCA directories required by the comparison set exist
+    pca_dirs <- vapply(
+      COMPARISON_CONFIGS,
+      function(cfg) get_pca_dir_for_comparison(cfg$prefix, mp),
+      character(1)
     )
 
     for (d in unique(pca_dirs)) {
@@ -230,135 +485,125 @@ plot_pca_per_model <- function(mat_log2 = mat_log2,
     meta_model <- metadata_aligned %>%
       dplyr::filter(type == "Sample", model == m)
 
-    # -------------------------------------------------------------------------
-    # 1) Global PCA with all samples from the model
-    # color = group | shape = sex
-    # -------------------------------------------------------------------------
-    ok <- plot_one_pca_subset(
-      mat_log2 = mat_log2,
-      meta = meta_model,
-      out_png = file.path(
-        mp$plots$pca_global,
-        paste0("PCA_ACTIVE_model_", m, "_scaling_", pca_scaling, ".png")
-      ),
-      title_main = paste0("PCA - model=", m, " (", pca_scaling, ")"),
-      pca_scaling = pca_scaling,
-      color_var = "group",
-      shape_var = "sex",
-      log_path = log_path
-    )
-    if (isTRUE(ok)) n_done <- n_done + 1
+    for (comp_name in names(COMPARISON_CONFIGS)) {
+      cfg <- COMPARISON_CONFIGS[[comp_name]]
+      model_groups <- resolve_model_group_values(m)
+      meta_sub <- cfg$meta_filter(meta_model, model_name = m)
+      out_dir <- get_pca_dir_for_comparison(cfg$prefix, mp)
 
-    # -------------------------------------------------------------------------
-    # 2) Global TG vs WT comparison
-    # color = group | shape = sex
-    # -------------------------------------------------------------------------
-    meta_tg_vs_wt <- meta_model %>%
-      dplyr::filter(group %in% c(comparison_group_control, comparison_group_treatment))
-
-    ok <- plot_one_pca_subset(
-      mat_log2 = mat_log2,
-      meta = meta_tg_vs_wt,
-      out_png = file.path(
-        mp$plots$pca_tg_vs_wt,
-        paste0("PCA_ACTIVE_model_", m, "_tg_vs_wt_scaling_", pca_scaling, ".png")
-      ),
-      title_main = paste0("PCA - model=", m, " | ", comparison_group_treatment, " vs ", comparison_group_control, " (", pca_scaling, ")"),
-      pca_scaling = pca_scaling,
-      color_var = "group",
-      shape_var = "sex",
-      log_path = log_path
-    )
-    if (isTRUE(ok)) n_done <- n_done + 1
-
-    # -------------------------------------------------------------------------
-    # 3) Global F vs M comparison
-    # color = sex | shape = group
-    # -------------------------------------------------------------------------
-    meta_f_vs_m <- meta_model %>%
-      dplyr::filter(sex %in% c("F", "M"))
-
-    ok <- plot_one_pca_subset(
-      mat_log2 = mat_log2,
-      meta = meta_f_vs_m,
-      out_png = file.path(
-        mp$plots$pca_f_vs_m,
-        paste0("PCA_ACTIVE_model_", m, "_f_vs_m_scaling_", pca_scaling, ".png")
-      ),
-      title_main = paste0("PCA - model=", m, " | F vs M (", pca_scaling, ")"),
-      pca_scaling = pca_scaling,
-      color_var = "sex",
-      shape_var = "group",
-      log_path = log_path
-    )
-    if (isTRUE(ok)) n_done <- n_done + 1
-
-    # -------------------------------------------------------------------------
-    # 4) PCA within WT and within TG
-    # color = sex | shape = sex
-    # -------------------------------------------------------------------------
-    for (grp in c(comparison_group_control, comparison_group_treatment)) {
-      meta_grp <- meta_model %>%
-        dplyr::filter(group == grp)
-      out_dir <- if (identical(grp, comparison_group_treatment)) {
-        mp$plots$pca_tg_f_vs_tg_m
-      } else {
-        mp$plots$pca_wt_f_vs_wt_m
-      }
-
-      ok <- plot_one_pca_subset(
-        mat_log2 = mat_log2,
-        meta = meta_grp,
-        out_png = file.path(
-          mp$plots$pca_by_group,
-          paste0("PCA_ACTIVE_model_", m, "_group_", grp, "_scaling_", pca_scaling, ".png")
-        ),
-        title_main = paste0("PCA - model=", m, " | group=", grp, " (", pca_scaling, ")"),
-        pca_scaling = pca_scaling,
-        color_var = "sex",
-        shape_var = "sex",
-        log_path = log_path
+      comp_label <- switch(
+        comp_name,
+        tg_vs_wt = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=ALL"),
+        "tg-f_vs_wt-f" = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=F"),
+        "tg-m_vs_wt-m" = paste0(model_groups$treatment, " vs ", model_groups$control, " | sex=M"),
+        "tg-f_vs_tg-m" = paste0("F vs M within ", model_groups$treatment),
+        "wt-f_vs_wt-m" = paste0("F vs M within ", model_groups$control),
+        cfg$label
       )
-      if (isTRUE(ok)) n_done <- n_done + 1
 
+      # For ALL_TGvsWT produce two PCA plots: ellipse colored by group, and ellipse colored by sex
+      if (identical(comp_name, "ALL_TGvsWT") || identical(cfg$prefix, "ALL_TGvsWT")) {
+        out_base_group <- file.path(
+          out_dir,
+          paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, "_ellipse_group.png")
+        )
+        ok1 <- plot_one_pca_subset(
+          mat_log2 = mat_log2,
+          meta = meta_sub,
+          out_png = out_base_group,
+          title_main = paste0("PCA - model=", m, " | ", comp_label, " (", pca_scaling, ") | ellipse=group"),
+          pca_scaling = pca_scaling,
+          color_var = cfg$pca_color_var,
+          shape_var = cfg$pca_shape_var,
+          ellipse_color_var = "group",
+          draw_ellipse = TRUE,
+          ellipse_positive = ellipse_positive,
+          log_path = log_path
+        )
+        if (isTRUE(ok1)) n_done <- n_done + 1
+
+        out_base_sex <- file.path(
+          out_dir,
+          paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, "_ellipse_sex.png")
+        )
+        ok2 <- plot_one_pca_subset(
+          mat_log2 = mat_log2,
+          meta = meta_sub,
+          out_png = out_base_sex,
+          title_main = paste0("PCA - model=", m, " | ", comp_label, " (", pca_scaling, ") | ellipse=sex"),
+          pca_scaling = pca_scaling,
+          color_var = cfg$pca_color_var,
+          shape_var = cfg$pca_shape_var,
+          ellipse_color_var = "sex",
+          draw_ellipse = TRUE,
+          ellipse_positive = ellipse_positive,
+          log_path = log_path
+        )
+        if (isTRUE(ok2)) n_done <- n_done + 1
+      } else {
+        title_base <- paste0("PCA - model=", m, " | ", comp_label, " (", pca_scaling, ")")
+
+        if (identical(comp_name, "ALL_TGvsWT")) {
+          # produce two plots: ellipses by group, and ellipses by sex
+          out_png_group <- file.path(
+            out_dir,
+            paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_ellipse_by_group_scaling_", pca_scaling, ".png")
+          )
+
+          ok1 <- plot_one_pca_subset(
+            mat_log2 = mat_log2,
+            meta = meta_sub,
+            out_png = out_png_group,
+            title_main = paste0(title_base, " | ellipse=group"),
+            pca_scaling = pca_scaling,
+            color_var = cfg$pca_color_var,
+            shape_var = cfg$pca_shape_var,
+            ellipse_color_var = "group",
+            draw_ellipse = TRUE,
+            ellipse_positive = ellipse_positive,
+            log_path = log_path
+          )
+          if (isTRUE(ok1)) n_done <- n_done + 1
+
+          out_png_sex <- file.path(
+            out_dir,
+            paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_ellipse_by_sex_scaling_", pca_scaling, ".png")
+          )
+
+          ok2 <- plot_one_pca_subset(
+            mat_log2 = mat_log2,
+            meta = meta_sub,
+            out_png = out_png_sex,
+            title_main = paste0(title_base, " | ellipse=sex"),
+            pca_scaling = pca_scaling,
+            color_var = cfg$pca_color_var,
+            shape_var = cfg$pca_shape_var,
+            ellipse_color_var = "sex",
+            draw_ellipse = TRUE,
+            ellipse_positive = ellipse_positive,
+            log_path = log_path
+          )
+          if (isTRUE(ok2)) n_done <- n_done + 1
+        } else {
       ok <- plot_one_pca_subset(
         mat_log2 = mat_log2,
-        meta = meta_grp,
+        meta = meta_sub,
         out_png = file.path(
           out_dir,
-          paste0("PCA_ACTIVE_model_", m, "_group_", grp, "_f_vs_m_scaling_", pca_scaling, ".png")
+          paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, ".png")
         ),
-        title_main = paste0("PCA - model=", m, " | F vs M within ", grp, " (", pca_scaling, ")"),
+        title_main = title_base,
         pca_scaling = pca_scaling,
-        color_var = "sex",
-        shape_var = "sex",
+        color_var = cfg$pca_color_var,
+        shape_var = cfg$pca_shape_var,
+        ellipse_color_var = cfg$pca_ellipse_color_var,
+        draw_ellipse = TRUE,
+        ellipse_positive = ellipse_positive,
         log_path = log_path
       )
       if (isTRUE(ok)) n_done <- n_done + 1
     }
-
-    # -------------------------------------------------------------------------
-    # 5) PCA within F and within M
-    # color = group | shape = group
-    # -------------------------------------------------------------------------
-    for (sx in c("F", "M")) {
-      meta_sex <- meta_model %>%
-        dplyr::filter(sex == sx)
-
-      ok <- plot_one_pca_subset(
-        mat_log2 = mat_log2,
-        meta = meta_sex,
-        out_png = file.path(
-           mp$plots$pca_by_sex,
-          paste0("PCA_ACTIVE_model_", m, "_sex_", sx, "_scaling_", pca_scaling, ".png")
-        ),
-        title_main = paste0("PCA - model=", m, " | sex=", sx, " (", pca_scaling, ")"),
-        pca_scaling = pca_scaling,
-        color_var = "group",
-        shape_var = "group",
-        log_path = log_path
-      )
-      if (isTRUE(ok)) n_done <- n_done + 1
+  }
     }
   }
 

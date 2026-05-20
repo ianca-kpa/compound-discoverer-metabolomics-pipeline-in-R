@@ -91,12 +91,11 @@ apply_heatmap_scaling <- function(mat, method = c("none", "zscore", "pareto")) {
 # -----------------------------------------------------------------------------
 # Annotation colors (same logic as before)
 # -----------------------------------------------------------------------------
-get_ma_annotation_colors <- function() {
-  comparison_group_control <- get0("comparison_group_control", ifnotfound = "WT", inherits = TRUE)
-  comparison_group_treatment <- get0("comparison_group_treatment", ifnotfound = "TG", inherits = TRUE)
+get_ma_annotation_colors <- function(model_name = NULL) {
+  groups <- resolve_model_group_values(model_name)
 
   list(
-    class = setNames(c("#4EEE94", "#FFA54F"), c(comparison_group_control, comparison_group_treatment)),
+    class = setNames(c("#4EEE94", "#FFA54F"), c(groups$control, groups$treatment)),
     sex   = c(F = "#CD0000", M = "#009ACD")
   )
 }
@@ -116,12 +115,12 @@ safe_feature_labels <- function(feature_ids, feature_tbl) {
 # -----------------------------------------------------------------------------
 # Ranking helper for top heatmaps
 # -----------------------------------------------------------------------------
-comparison_group_control <- get0("comparison_group_control", ifnotfound = "WT", inherits = TRUE)
-comparison_group_treatment <- get0("comparison_group_treatment", ifnotfound = "TG", inherits = TRUE)
-
 compute_ttest_pvals_only <- function(mat_log2, meta_sub) {
+  model_name <- if ("model" %in% names(meta_sub) && length(unique(meta_sub$model)) >= 1) unique(meta_sub$model)[1] else NULL
+  groups <- resolve_model_group_values(model_name)
+
   meta_sub <- meta_sub %>%
-    dplyr::filter(group %in% c(comparison_group_control, comparison_group_treatment), sample %in% rownames(mat_log2)) %>%
+    dplyr::filter(group %in% c(groups$control, groups$treatment), sample %in% rownames(mat_log2)) %>%
     dplyr::mutate(.ord = match(sample, rownames(mat_log2))) %>%
     dplyr::arrange(.ord) %>%
     dplyr::select(-.ord)
@@ -130,7 +129,7 @@ compute_ttest_pvals_only <- function(mat_log2, meta_sub) {
     return(NULL)
   }
 
-  if (sum(meta_sub$group == comparison_group_control) < 2 || sum(meta_sub$group == comparison_group_treatment) < 2) {
+  if (sum(meta_sub$group == groups$control) < 2 || sum(meta_sub$group == groups$treatment) < 2) {
     return(NULL)
   }
 
@@ -141,8 +140,8 @@ compute_ttest_pvals_only <- function(mat_log2, meta_sub) {
   pvals <- rep(NA_real_, ncol(sub))
 
   for (j in seq_len(ncol(sub))) {
-    x <- sub[g == comparison_group_control, j]
-    y <- sub[g == comparison_group_treatment, j]
+    x <- sub[g == groups$control, j]
+    y <- sub[g == groups$treatment, j]
 
     if (all(is.na(x)) || all(is.na(y))) {
       next
@@ -173,13 +172,12 @@ resolve_heatmap_dir <- function(mp,
                                 by_sex = FALSE,
                                 by_group = FALSE,
                                 comp_type = NULL) {
-  # comp_type: NULL (none), "tg_vs_wt", "f_vs_m", "tg_f_vs_tg_m", "wt_f_vs_wt_m"
+  # comp_type: NULL (none), "tg_vs_wt", "tg_f_vs_tg_m", "wt_f_vs_wt_m"
   if (!sig && !by_sex && !by_group && is.null(comp_type)) return(mp$plots$heatmap_global)
   if (!sig &&  by_sex && !by_group && is.null(comp_type)) return(mp$plots$heatmap_by_sex)
   if (!sig && !by_sex &&  by_group && is.null(comp_type)) return(mp$plots$heatmap_by_group)
   if (!sig && !by_sex && !by_group && !is.null(comp_type)) {
     if (comp_type == "tg_vs_wt") return(mp$plots$heatmap_tg_vs_wt)
-    if (comp_type == "f_vs_m") return(mp$plots$heatmap_f_vs_m)
     if (comp_type == "tg_f_vs_tg_m") return(mp$plots$heatmap_tg_f_vs_tg_m)
     if (comp_type == "wt_f_vs_wt_m") return(mp$plots$heatmap_wt_f_vs_wt_m)
   }
@@ -188,7 +186,6 @@ resolve_heatmap_dir <- function(mp,
   if ( sig && !by_sex &&  by_group && is.null(comp_type)) return(mp$plots$heatmap_significant_by_group)
   if ( sig && !by_sex && !by_group && !is.null(comp_type)) {
     if (comp_type == "tg_vs_wt") return(mp$plots$heatmap_significant_tg_vs_wt)
-    if (comp_type == "f_vs_m") return(mp$plots$heatmap_significant_f_vs_m)
     if (comp_type == "tg_f_vs_tg_m") return(mp$plots$heatmap_significant_tg_f_vs_tg_m)
     if (comp_type == "wt_f_vs_wt_m") return(mp$plots$heatmap_significant_wt_f_vs_wt_m)
   }
@@ -259,7 +256,6 @@ plot_heatmap_top_ttest_per_model <- function(mat_log2,
   scale_method <- match.arg(scale_method)
 
   models <- sort(unique(metadata_aligned$model[metadata_aligned$type == "Sample"]))
-  ann_colors <- get_ma_annotation_colors()
   count <- 0
 
   sex_levels <- if (split_by_sex) {
@@ -270,6 +266,8 @@ plot_heatmap_top_ttest_per_model <- function(mat_log2,
 
   for (m in models) {
     mp <- get_model_paths(paths, m)
+    groups <- resolve_model_group_values(m)
+    ann_colors <- get_ma_annotation_colors(m)
     out_dir <- resolve_heatmap_dir(
       mp = mp,
       sig = FALSE,
@@ -282,7 +280,7 @@ plot_heatmap_top_ttest_per_model <- function(mat_log2,
         dplyr::filter(
           type == "Sample",
           model == m,
-          group %in% c(comparison_group_control, comparison_group_treatment),
+          group %in% c(groups$control, groups$treatment),
           sample %in% rownames(mat_log2)
         )
 
@@ -297,17 +295,17 @@ plot_heatmap_top_ttest_per_model <- function(mat_log2,
         next
       }
 
-      if (sum(meta$group == comparison_group_control) < 2 || sum(meta$group == comparison_group_treatment) < 2) {
+      if (sum(meta$group == groups$control) < 2 || sum(meta$group == groups$treatment) < 2) {
         message("  - Skipping TOP heatmap for model=", m,
                 if (split_by_sex) paste0(", sex=", sx) else "",
-                " (need at least 2 ", comparison_group_control, " and 2 ", comparison_group_treatment, ").")
+                " (need at least 2 ", groups$control, " and 2 ", groups$treatment, ").")
         next
       }
 
       if (isTRUE(order_samples_by_group)) {
         meta <- meta %>%
           dplyr::mutate(
-            group = factor(group, levels = c(comparison_group_control, comparison_group_treatment)),
+            group = factor(group, levels = c(groups$control, groups$treatment)),
             sex   = factor(sex, levels = c("F", "M"))
           ) %>%
           dplyr::arrange(group, sex, sample)
@@ -419,6 +417,8 @@ plot_sig_heatmap_from_stats <- function(mat_log2,
                                         title_main) {
   sig_metric <- match.arg(sig_metric)
   scale_method <- match.arg(scale_method)
+  model_name <- if ("model" %in% names(meta) && length(unique(meta$model)) >= 1) unique(meta$model)[1] else NULL
+  groups <- resolve_model_group_values(model_name)
 
   if (is.null(stats_df) || nrow(stats_df) < 2) {
     message("  - Significant heatmap skipped: stats table is NULL or too small.")
@@ -464,7 +464,7 @@ plot_sig_heatmap_from_stats <- function(mat_log2,
   if (isTRUE(order_samples_by_group) && all(c("group", "sex") %in% names(meta))) {
     meta <- meta %>%
       dplyr::mutate(
-        group = factor(group, levels = c(comparison_group_control, comparison_group_treatment)),
+        group = factor(group, levels = c(groups$control, groups$treatment)),
         sex   = factor(sex, levels = c("F", "M"))
       ) %>%
       dplyr::arrange(group, sex, sample)
@@ -482,7 +482,7 @@ plot_sig_heatmap_from_stats <- function(mat_log2,
 
   colnames(mat_m) <- safe_feature_labels(colnames(mat_m), feature_tbl)
 
-  ann_colors <- get_ma_annotation_colors()
+  ann_colors <- get_ma_annotation_colors(model_name)
 
   ann_col <- meta %>%
     dplyr::select(dplyr::any_of(c("group", "sex"))) %>%

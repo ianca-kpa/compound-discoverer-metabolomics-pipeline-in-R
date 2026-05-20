@@ -89,6 +89,71 @@ read_any_table <- function(path, sheet = 1) {
   stop("Unsupported file extension: ", ext)
 }
 
+resolve_model_group_values <- function(model_name = NULL,
+                                      control_label = NULL,
+                                      treatment_label = NULL) {
+  if (is.null(control_label)) {
+    control_label <- get0("comparison_group_control", ifnotfound = "WT", inherits = TRUE)
+  }
+  if (is.null(treatment_label)) {
+    treatment_label <- get0("comparison_group_treatment", ifnotfound = "TG", inherits = TRUE)
+  }
+
+  labels <- list(
+    control = as.character(control_label)[1],
+    treatment = as.character(treatment_label)[1]
+  )
+
+  model_name <- trimws(as.character(model_name)[1])
+  if (!nzchar(model_name)) {
+    return(labels)
+  }
+
+  model_groups <- get0("model_allowed_groups_by_model", ifnotfound = NULL, inherits = TRUE)
+  if (is.null(model_groups) || length(model_groups) == 0 || is.null(names(model_groups))) {
+    return(labels)
+  }
+
+  idx <- match(model_name, trimws(names(model_groups)))
+  if (is.na(idx)) {
+    return(labels)
+  }
+
+  raw <- unlist(strsplit(as.character(model_groups[[idx]]), ",", fixed = TRUE), use.names = FALSE)
+  raw <- trimws(raw)
+  raw <- raw[nzchar(raw)]
+
+  if (length(raw) >= 1) {
+    labels$control <- raw[1]
+  }
+  if (length(raw) >= 2) {
+    labels$treatment <- raw[2]
+  } else if (length(raw) == 1) {
+    labels$treatment <- raw[1]
+  }
+
+  labels
+}
+
+# Alias for compatibility (same as resolve_model_group_values)
+get_comparison_group_labels_for_model <- function(model_name = NULL,
+                                                 control_label = get0("comparison_group_control", ifnotfound = "WT", inherits = TRUE),
+                                                 treatment_label = get0("comparison_group_treatment", ifnotfound = "TG", inherits = TRUE)) {
+  resolve_model_group_values(model_name, control_label, treatment_label)
+}
+
+# Map comparison group display values: converts global group names to display names if configured per-model
+map_comparison_group_display_values <- function(values, model_name = NULL) {
+  labels <- get_comparison_group_labels_for_model(model_name)
+  control_global <- get0("comparison_group_control", ifnotfound = "WT", inherits = TRUE)
+  treatment_global <- get0("comparison_group_treatment", ifnotfound = "TG", inherits = TRUE)
+
+  out <- as.character(values)
+  out[out == control_global] <- labels$control
+  out[out == treatment_global] <- labels$treatment
+  out
+}
+
 # -----------------------------------------------------------------------------
 # Text cleaning / sanitization helpers
 # -----------------------------------------------------------------------------
@@ -128,6 +193,272 @@ sanitize_text_for_exports <- function(x, mode = c("greek_latin_ascii","ascii_tra
   x <- stringr::str_replace_all(x, "[[:cntrl:]]+", "")
   x
 }
+
+# Normalize simple names (lowercase trim)
+normalize_name <- function(x) {
+  tolower(trimws(as.character(x)))
+}
+
+# Normalize model group pairs: map per-model alias values to control/treatment labels
+normalize_model_group_pairs <- function(groups_vec, model_vec, pair_map, control_label, treatment_label) {
+  if (is.null(pair_map) || length(pair_map) == 0) {
+    return(groups_vec)
+  }
+
+  if (is.null(model_vec) || length(model_vec) == 0) {
+    return(groups_vec)
+  }
+
+  out <- as.character(groups_vec)
+  model_vec <- trimws(as.character(model_vec))
+  model_keys <- names(pair_map)
+
+  if (is.null(model_keys) || length(model_keys) == 0) {
+    return(groups_vec)
+  }
+
+  for (model_name in model_keys) {
+    pair_raw <- as.character(pair_map[[model_name]])
+    pair_vals <- unlist(strsplit(pair_raw, ",", fixed = TRUE), use.names = FALSE)
+    pair_vals <- trimws(pair_vals)
+    pair_vals <- pair_vals[nzchar(pair_vals)]
+
+    if (length(pair_vals) == 0) {
+      next
+    }
+
+    model_idx <- !is.na(model_vec) & trimws(model_vec) == trimws(model_name)
+    if (!any(model_idx)) {
+      next
+    }
+
+    group_vals <- trimws(out[model_idx])
+    group_norm <- toupper(group_vals)
+    if (length(pair_vals) >= 1) {
+      control_idx <- which(model_idx)[group_norm %in% toupper(pair_vals[1])]
+      if (length(control_idx) > 0) {
+        out[control_idx] <- control_label
+      }
+    }
+
+    if (length(pair_vals) >= 2) {
+      treatment_idx <- which(model_idx)[group_norm %in% toupper(pair_vals[2])]
+      if (length(treatment_idx) > 0) {
+        out[treatment_idx] <- treatment_label
+      }
+    } else {
+      treatment_idx <- which(model_idx)[group_norm %in% toupper(pair_vals[1])]
+      if (length(treatment_idx) > 0) {
+        out[treatment_idx] <- treatment_label
+      }
+    }
+  }
+
+  out
+}
+
+normalize_config_text <- function(text) {
+  text <- gsub("\u201C|\u201D", '"', text, perl = TRUE)
+  text <- gsub("\u2018|\u2019", "'", text, perl = TRUE)
+  text
+}
+
+# -----------------------------------------------------------------------------
+# Helper: detect missing-like values
+# -----------------------------------------------------------------------------
+is_missing_like <- function(x) {
+  xn <- toupper(trimws(as.character(x)))
+  xn %in% c("", "NA", "N/A", "NULL")
+}
+
+# -----------------------------------------------------------------------------
+# General helpers moved from app/global.R for sharing: trimming, parsing, encoding
+# -----------------------------------------------------------------------------
+safe_trimws <- function(value) {
+  if (is.null(value) || length(value) == 0 || all(is.na(value))) {
+    return("")
+  }
+  trimws(as.character(value)[1])
+}
+
+safe_read_table <- function(path) {
+  if (!file.exists(path)) {
+    stop("File not found: ", path)
+  }
+  ext <- tolower(tools::file_ext(path))
+  if (ext %in% c("csv")) {
+    return(utils::read.csv(
+      path,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    ))
+  }
+  if (ext %in% c("tsv", "txt")) {
+    return(utils::read.delim(
+      path,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    ))
+  }
+  if (ext %in% c("xlsx", "xls")) {
+    if (!requireNamespace("readxl", quietly = TRUE)) {
+      stop("Package 'readxl' is required to read Excel metadata files.")
+    }
+    return(as.data.frame(readxl::read_excel(path), stringsAsFactors = FALSE))
+  }
+  stop("Unsupported metadata extension: ", ext)
+}
+
+# Parsing helpers
+parse_as_text <- function(value) {
+  value <- trimws(as.character(value)[1])
+  value <- sub("^c\\((.*)\\)$", "\\1", value, perl = TRUE)
+  gsub("^\"|\"$|^'|'$", "", value)
+}
+
+parse_as_logical <- function(value) {
+  tolower(trimws(as.character(value)[1])) %in% c("true", "t", "1", "yes")
+}
+
+parse_as_numeric <- function(value) {
+  suppressWarnings(as.numeric(as.character(value)[1]))
+}
+
+parse_as_vector <- function(value) {
+  if (length(value) == 1 && toupper(value) == "NULL") {
+    return(character(0))
+  }
+  value <- sub("^c\\((.*)\\)$", "\\1", value, perl = TRUE)
+  parts <- strsplit(value, ",", fixed = TRUE)[[1]]
+  parts <- gsub("^\"|\"$|^'|'$", "", trimws(parts))
+  parts[nzchar(parts)]
+}
+
+extract_and_parse_setting <- function(config_text, key, parser_fn, default = NULL) {
+  value <- extract_config_value(config_text, key)
+  if (!setting_has_value(value)) {
+    return(default)
+  }
+  parser_fn(value)
+}
+
+# Setting display helpers
+setting_display_value <- function(config_text, key, default = "") {
+  extract_and_parse_setting(config_text, key, parse_as_text, default)
+}
+
+setting_display_logical <- function(config_text, key, default = FALSE) {
+  extract_and_parse_setting(config_text, key, parse_as_logical, default)
+}
+
+setting_display_numeric <- function(config_text, key, default = NA_real_) {
+  numeric_value <- extract_and_parse_setting(config_text, key, parse_as_numeric, NA_real_)
+  if (length(numeric_value) != 1 || is.na(numeric_value)) default else numeric_value
+}
+
+setting_display_integer <- function(config_text, key, default = NA_integer_) {
+  value <- setting_display_numeric(config_text, key, default = NA_real_)
+  if (length(value) != 1 || is.na(value)) default else as.integer(round(value))
+}
+
+setting_display_vector <- function(config_text, key) {
+  extract_and_parse_setting(config_text, key, parse_as_vector, character(0))
+}
+
+setting_display_csv <- function(config_text, key, default = "") {
+  vec <- setting_display_vector(config_text, key)
+  if (length(vec) == 0) default else paste(vec, collapse = ", ")
+}
+
+setting_display_sheet <- function(config_text, key, default = "") {
+  value <- setting_display_value(config_text, key, default = default)
+  if (!setting_has_value(value)) {
+    return(default)
+  }
+  suppressWarnings({
+    numeric_value <- as.numeric(value)
+  })
+  if (!is.na(numeric_value) && abs(numeric_value - round(numeric_value)) < .Machine$double.eps^0.5) {
+    as.character(as.integer(round(numeric_value)))
+  } else {
+    value
+  }
+}
+
+# Encoding helpers
+encode_text <- function(value, nullable = FALSE) {
+  value <- safe_trimws(value)
+  if (!nzchar(value) || (nullable && toupper(value) == "NULL")) {
+    return("NULL")
+  }
+  dQuote(value)
+}
+
+encode_logical <- function(value) {
+  val <- toupper(safe_trimws(value))
+  if (val %in% c("TRUE", "T", "1", "YES")) "TRUE" else "FALSE"
+}
+
+encode_numeric <- function(value, default = 0) {
+  numeric_value <- suppressWarnings(as.numeric(value))
+  if (length(numeric_value) == 0 || is.na(numeric_value)) {
+    numeric_value <- default
+  }
+  format(numeric_value, scientific = FALSE, trim = TRUE)
+}
+
+encode_integer <- function(value, default = 0L) {
+  integer_value <- suppressWarnings(as.integer(round(as.numeric(value))))
+  if (length(integer_value) == 0 || is.na(integer_value)) {
+    integer_value <- default
+  }
+  as.character(integer_value)
+}
+
+encode_sheet <- function(value) {
+  value <- safe_trimws(value)
+  if (!nzchar(value)) {
+    return('""')
+  }
+  if (grepl("^-?[0-9]+(\\.[0]+)?$", value)) {
+    as.character(as.integer(round(as.numeric(value))))
+  } else {
+    dQuote(value)
+  }
+}
+
+encode_vector_text <- function(value, allow_null = FALSE) {
+  items <- trimws(unlist(strsplit(as.character(value), ",", fixed = TRUE)))
+  items <- items[nzchar(items)]
+  if (length(items) == 0) {
+    return(if (allow_null) "NULL" else "c()")
+  }
+  paste0("c(", paste(dQuote(items), collapse = ", "), ")")
+}
+
+encode_vector_numeric <- function(value) {
+  items <- trimws(unlist(strsplit(as.character(value), ",", fixed = TRUE)))
+  items <- items[nzchar(items)]
+  if (length(items) == 0) {
+    return("c()")
+  }
+  numeric_items <- suppressWarnings(as.numeric(items))
+  numeric_items <- numeric_items[!is.na(numeric_items)]
+  if (length(numeric_items) == 0) {
+    return("c()")
+  }
+  paste0("c(", paste(format(numeric_items, scientific = FALSE, trim = TRUE), collapse = ", "), ")")
+}
+
+# Setting value encoders
+setting_value_text <- function(value) { encode_text(value, nullable = FALSE) }
+setting_value_nullable_text <- function(value) { encode_text(value, nullable = TRUE) }
+setting_value_logical <- function(value) { encode_logical(value) }
+setting_value_numeric <- function(value, default = 0) { encode_numeric(value, default) }
+setting_value_integer <- function(value, default = 0L) { encode_integer(value, default) }
+setting_value_sheet <- function(value) { encode_sheet(value) }
+setting_value_vector_text <- function(value, allow_null = FALSE) { encode_vector_text(value, allow_null) }
+setting_value_vector_numeric <- function(value) { encode_vector_numeric(value) }
 
 parse_num_robust <- function(x, decimal_mark = ".", grouping_mark = ",") {
   raw <- stringr::str_trim(as.character(x))
@@ -218,7 +549,6 @@ make_one_model_paths <- function(output_dir, model_name) {
       heatmap_by_sex = file.path(model_root, "plots", "heatmap"),
       heatmap_by_group = file.path(model_root, "plots", "heatmap"),
       heatmap_tg_vs_wt = file.path(model_root, "plots", "heatmap"),
-      heatmap_f_vs_m = file.path(model_root, "plots", "heatmap"),
       heatmap_tg_f_vs_tg_m = file.path(model_root, "plots", "heatmap"),
       heatmap_wt_f_vs_wt_m = file.path(model_root, "plots", "heatmap"),
       heatmap_significant_global = file.path(model_root, "plots", "heatmap_significant"),
@@ -226,7 +556,6 @@ make_one_model_paths <- function(output_dir, model_name) {
       heatmap_significant_by_sex = file.path(model_root, "plots", "heatmap_significant"),
       heatmap_significant_by_group = file.path(model_root, "plots", "heatmap_significant"),
       heatmap_significant_tg_vs_wt = file.path(model_root, "plots", "heatmap_significant"),
-      heatmap_significant_f_vs_m = file.path(model_root, "plots", "heatmap_significant"),
       heatmap_significant_tg_f_vs_tg_m = file.path(model_root, "plots", "heatmap_significant"),
       heatmap_significant_wt_f_vs_wt_m = file.path(model_root, "plots", "heatmap_significant"),
       volcano_global = file.path(model_root, "plots", "volcano"),
@@ -234,7 +563,6 @@ make_one_model_paths <- function(output_dir, model_name) {
       volcano_by_sex = file.path(model_root, "plots", "volcano"),
       volcano_by_group = file.path(model_root, "plots", "volcano"),
       volcano_tg_vs_wt = file.path(model_root, "plots", "volcano"),
-      volcano_f_vs_m = file.path(model_root, "plots", "volcano"),
       volcano_tg_f_vs_tg_m = file.path(model_root, "plots", "volcano"),
       volcano_wt_f_vs_wt_m = file.path(model_root, "plots", "volcano"),
       pca_global = file.path(model_root, "plots", "pca"),
@@ -242,7 +570,6 @@ make_one_model_paths <- function(output_dir, model_name) {
       pca_by_sex = file.path(model_root, "plots", "pca"),
       pca_by_group = file.path(model_root, "plots", "pca"),
       pca_tg_vs_wt = file.path(model_root, "plots", "pca"),
-      pca_f_vs_m = file.path(model_root, "plots", "pca"),
       pca_tg_f_vs_tg_m = file.path(model_root, "plots", "pca"),
       pca_wt_f_vs_wt_m = file.path(model_root, "plots", "pca")
     )

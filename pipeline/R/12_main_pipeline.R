@@ -22,7 +22,7 @@ run_untargeted_pipeline <- function() {
     step_info("cd_sheet: ", cd_sheet)
     step_info("metadata_path: ", metadata_path)
     step_info("metadata_sheet: ", metadata_sheet)
-    step_info("comparison_path (reference): ", if (exists("comparison_path", inherits = TRUE) && !is.null(comparison_path) && nzchar(as.character(comparison_path))) comparison_path else "not provided")
+    step_info("reference_path: ", if (exists("reference_path", inherits = TRUE) && !is.null(reference_path) && nzchar(as.character(reference_path))) reference_path else "not provided")
     step_info("output_dir: ", output_dir)
     step_info("use_only_known: ", use_only_known)
     step_info("duplicate_name_strategy: ", duplicate_name_strategy)
@@ -39,9 +39,9 @@ run_untargeted_pipeline <- function() {
     use_reference_file_local <- if (exists("use_reference_file", inherits = TRUE)) {
       isTRUE(use_reference_file)
     } else {
-      exists("comparison_path", inherits = TRUE) &&
-        !is.null(comparison_path) &&
-        nzchar(as.character(comparison_path))
+      exists("reference_path", inherits = TRUE) &&
+        !is.null(reference_path) &&
+        nzchar(as.character(reference_path))
     }
 
     get_optional_col_override <- function(var_name) {
@@ -59,11 +59,11 @@ run_untargeted_pipeline <- function() {
     )
 
     if (isTRUE(use_reference_file_local) &&
-        exists("comparison_path", inherits = TRUE) &&
-        !is.null(comparison_path) &&
-        nzchar(as.character(comparison_path))) {
-      comparison_sheet_local <- if (exists("comparison_sheet", inherits = TRUE)) comparison_sheet else 1
-      reference_tbl <- read_any_table(comparison_path, comparison_sheet_local)
+        exists("reference_path", inherits = TRUE) &&
+        !is.null(reference_path) &&
+        nzchar(as.character(reference_path))) {
+      reference_sheet_local <- if (exists("reference_sheet", inherits = TRUE)) reference_sheet else 1
+      reference_tbl <- read_any_table(reference_path, reference_sheet_local)
       step_info("Reference table: rows=", nrow(reference_tbl), " cols=", ncol(reference_tbl))
       step_info(
         "Reference column overrides (metabolite/ref_ion/mz/rt): ",
@@ -72,7 +72,7 @@ run_untargeted_pipeline <- function() {
     } else if (!isTRUE(use_reference_file_local)) {
       step_info("Reference table: disabled by use_reference_file = FALSE")
     } else {
-      step_info("Reference table: not provided (comparison_path empty)")
+      step_info("Reference table: not provided (reference_path empty)")
     }
 
     step_info("Compound Discoverer table: rows=", nrow(cd_raw), " cols=", ncol(cd_raw))
@@ -513,7 +513,8 @@ run_untargeted_pipeline <- function() {
         mat_log2_base,
         metadata_aligned,
         paths,
-        pca_scaling = pca_scaling
+        pca_scaling = pca_scaling,
+        ellipse_positive = if (exists("ellipse_positive", inherits = TRUE)) ellipse_positive else TRUE
       )
 
       step_info("PCA scaling: ", pca_scaling)
@@ -610,12 +611,16 @@ run_untargeted_pipeline <- function() {
         metadata_aligned = metadata_aligned,
         feat_info = variants$ACTIVE$feature,
         paths = paths,
-        alpha_sig = alpha_sig,
+        p_value_cutoff = p_value_cutoff,
+        fdr_cutoff = fdr_cutoff,
         fc_cutoff_log2 = fc_cutoff_log2,
         run_metrics = run_metrics,
         make_volcano_plots = make_volcano_plots,
         volcano_style = volcano_style,
-        comparison_configs = COMPARISON_CONFIGS
+        comparison_configs = COMPARISON_CONFIGS,
+        statistical_test_type = statistical_test_type,
+        test_is_paired = test_is_paired,
+        pvalue_correction_method = pvalue_correction_method
       )
 
       if (isTRUE(save_stats_excel_per_model)) {
@@ -624,10 +629,14 @@ run_untargeted_pipeline <- function() {
         export_stats_excel_by_model(
           stats_5sets_by_model,
           paths = paths,
-          alpha_sig = alpha_sig,
+          p_value_cutoff = p_value_cutoff,
+          fdr_cutoff = fdr_cutoff,
           fc_cutoff_log2 = fc_cutoff_log2,
           active_variant = active_variant,
-          log_path = log_path
+          log_path = log_path,
+          statistical_test_type = statistical_test_type,
+          test_is_paired = test_is_paired,
+          pvalue_correction_method = pvalue_correction_method
         )
       }
 
@@ -637,7 +646,8 @@ run_untargeted_pipeline <- function() {
         export_significant_metabolites_txt_by_model(
           stats_5sets_by_model,
           paths = paths,
-          alpha_sig = alpha_sig,
+          p_value_cutoff = p_value_cutoff,
+          fdr_cutoff = fdr_cutoff,
           fc_cutoff_log2 = fc_cutoff_log2,
           active_variant = active_variant,
           log_path = log_path,
@@ -655,18 +665,22 @@ run_untargeted_pipeline <- function() {
         step_info("Significant heatmaps (ALL sex ", comparison_group_treatment, "/", comparison_group_control, ") for BOTH metrics...")
 
         for (met in run_metrics_expanded) {
+          # Use the appropriate cutoff for this metric
+          current_alpha <- if (met == "FDR") fdr_cutoff else p_value_cutoff
+          
           for (m in models) {
             mp <- get_model_paths(paths, m)
+            model_groups <- resolve_model_group_values(m)
 
             meta_m <- metadata_aligned %>%
-              dplyr::filter(type == "Sample", model == m, group %in% c(comparison_group_control, comparison_group_treatment))
+              dplyr::filter(type == "Sample", model == m, group %in% c(model_groups$control, model_groups$treatment))
 
             st <- stats_5sets_by_model[[m]][["tg_vs_wt"]]
             if (!is.null(st)) {
               out_png <- file.path(
                 mp$plots$heatmap_significant_all,
                 paste0(
-                  "HEATMAP_SIG_ACTIVE_ALL_", comparison_group_treatment, "vs", comparison_group_control, "_", met, "_lt_", alpha_sig,
+                  "HEATMAP_SIG_ACTIVE_ALL_", model_groups$treatment, "vs", model_groups$control, "_", met, "_lt_", current_alpha,
                   "_model_", m, "_scale_", heatmap_scale_method, ".png"
                 )
               )
@@ -677,7 +691,7 @@ run_untargeted_pipeline <- function() {
                 variants$ACTIVE$feature,
                 st,
                 sig_metric = met,
-                alpha_sig = alpha_sig,
+                alpha_sig = current_alpha,
                 fc_cutoff_log2 = fc_cutoff_log2,
                 require_fc_cutoff = sig_heatmap_require_fc_cutoff,
                 sig_max = sig_heatmap_max_features,
@@ -685,48 +699,14 @@ run_untargeted_pipeline <- function() {
                 order_samples_by_group = heatmap_order_samples_by_group,
                 out_png = out_png,
                 title_main = paste0(
-                  "SIG (", comparison_group_treatment, "/", comparison_group_control, ") | model=", m,
-                  " | sex=ALL | ", met, "<", alpha_sig,
+                  "SIG (", model_groups$treatment, "/", model_groups$control, ") | model=", m,
+                  " | sex=ALL | ", met, "<", current_alpha,
                   if (sig_heatmap_require_fc_cutoff) paste0(" & |log2FC|>=", fc_cutoff_log2) else "",
                   " | scale=", heatmap_scale_method
                 )
               )
             }
 
-            meta_f_vs_m <- metadata_aligned %>%
-              dplyr::filter(type == "Sample", model == m, sex %in% c("F", "M"))
-
-            st_f_vs_m <- stats_5sets_by_model[[m]][["f_vs_m"]]
-            if (!is.null(st_f_vs_m)) {
-              out_png_f_vs_m <- file.path(
-                mp$plots$heatmap_significant_f_vs_m,
-                paste0(
-                  "HEATMAP_SIG_ACTIVE_FvsM_", met, "_lt_", alpha_sig,
-                  "_model_", m, "_scale_", heatmap_scale_method, ".png"
-                )
-              )
-
-              plot_sig_heatmap_from_stats(
-                mat_log2_base,
-                meta_f_vs_m,
-                variants$ACTIVE$feature,
-                st_f_vs_m,
-                sig_metric = met,
-                alpha_sig = alpha_sig,
-                fc_cutoff_log2 = fc_cutoff_log2,
-                require_fc_cutoff = sig_heatmap_require_fc_cutoff,
-                sig_max = sig_heatmap_max_features,
-                scale_method = heatmap_scale_method,
-                order_samples_by_group = FALSE,
-                out_png = out_png_f_vs_m,
-                title_main = paste0(
-                  "SIG (F/M) | model=", m,
-                  " | group=ALL | ", met, "<", alpha_sig,
-                  if (sig_heatmap_require_fc_cutoff) paste0(" & |log2FC|>=", fc_cutoff_log2) else "",
-                  " | log2FC=log2(F/M) | scale=", heatmap_scale_method
-                )
-              )
-            }
           }
         }
       }
@@ -738,12 +718,16 @@ run_untargeted_pipeline <- function() {
         step_info("Significant heatmaps (", comparison_group_treatment, "/", comparison_group_control, ") BY sex for BOTH metrics...")
 
         for (met in run_metrics_expanded) {
+          # Use the appropriate cutoff for this metric
+          current_alpha <- if (met == "FDR") fdr_cutoff else p_value_cutoff
+          
           for (m in models) {
             mp <- get_model_paths(paths, m)
+            model_groups <- resolve_model_group_values(m)
 
             for (sx in sexes) {
               meta_m <- metadata_aligned %>%
-                dplyr::filter(type == "Sample", model == m, sex == sx, group %in% c(comparison_group_control, comparison_group_treatment))
+                dplyr::filter(type == "Sample", model == m, sex == sx, group %in% c(model_groups$control, model_groups$treatment))
 
               st <- if (sx == "F") {
                 stats_5sets_by_model[[m]][["tg-f_vs_wt-f"]]
@@ -756,7 +740,7 @@ run_untargeted_pipeline <- function() {
               out_png <- file.path(
                 mp$plots$heatmap_significant_by_sex,
                   paste0(
-                    "HEATMAP_SIG_ACTIVE_", sx, "_", comparison_group_treatment, "vs", comparison_group_control, "_", met, "_lt_", alpha_sig,
+                    "HEATMAP_SIG_ACTIVE_", sx, "_", model_groups$treatment, "vs", model_groups$control, "_", met, "_lt_", current_alpha,
                   "_model_", m, "_scale_", heatmap_scale_method, ".png"
                 )
               )
@@ -767,7 +751,7 @@ run_untargeted_pipeline <- function() {
                 variants$ACTIVE$feature,
                 st,
                 sig_metric = met,
-                alpha_sig = alpha_sig,
+                alpha_sig = current_alpha,
                 fc_cutoff_log2 = fc_cutoff_log2,
                 require_fc_cutoff = sig_heatmap_require_fc_cutoff,
                 sig_max = sig_heatmap_max_features,
@@ -775,9 +759,9 @@ run_untargeted_pipeline <- function() {
                 order_samples_by_group = heatmap_order_samples_by_group,
                 out_png = out_png,
                   title_main = paste0(
-                    "SIG (", comparison_group_treatment, "/", comparison_group_control, ") | model=", m,
+                    "SIG (", model_groups$treatment, "/", model_groups$control, ") | model=", m,
                   " | sex=", sx,
-                  " | ", met, "<", alpha_sig,
+                  " | ", met, "<", current_alpha,
                   if (sig_heatmap_require_fc_cutoff) paste0(" & |log2FC|>=", fc_cutoff_log2) else "",
                   " | scale=", heatmap_scale_method
                 )
@@ -794,18 +778,22 @@ run_untargeted_pipeline <- function() {
         step_info("Significant heatmaps (F vs M within ", comparison_group_treatment, " and ", comparison_group_control, ") for BOTH metrics...")
 
         for (met in run_metrics_expanded) {
+          # Use the appropriate cutoff for this metric
+          current_alpha <- if (met == "FDR") fdr_cutoff else p_value_cutoff
+          
           for (m in models) {
             mp <- get_model_paths(paths, m)
+            model_groups <- resolve_model_group_values(m)
 
             meta_tg <- metadata_aligned %>%
-              dplyr::filter(type == "Sample", model == m, group == comparison_group_treatment, sex %in% c("F", "M"))
+              dplyr::filter(type == "Sample", model == m, group == model_groups$treatment, sex %in% c("F", "M"))
             st_tg <- stats_5sets_by_model[[m]][["tg-f_vs_tg-m"]]
 
             if (!is.null(st_tg)) {
               out_png_tg <- file.path(
                 mp$plots$heatmap_significant_tg_f_vs_tg_m,
                 paste0(
-                  "HEATMAP_SIG_ACTIVE_", comparison_group_treatment, "_FvsM_", met, "_lt_", alpha_sig,
+                  "HEATMAP_SIG_ACTIVE_", model_groups$treatment, "_FvsM_", met, "_lt_", current_alpha,
                   "_model_", m, "_scale_", heatmap_scale_method, ".png"
                 )
               )
@@ -816,7 +804,7 @@ run_untargeted_pipeline <- function() {
                 variants$ACTIVE$feature,
                 st_tg,
                 sig_metric = met,
-                alpha_sig = alpha_sig,
+                alpha_sig = current_alpha,
                 fc_cutoff_log2 = fc_cutoff_log2,
                 require_fc_cutoff = sig_heatmap_require_fc_cutoff,
                 sig_max = sig_heatmap_max_features,
@@ -824,8 +812,8 @@ run_untargeted_pipeline <- function() {
                 order_samples_by_group = FALSE,
                 out_png = out_png_tg,
                 title_main = paste0(
-                  "SIG (F/M within ", comparison_group_treatment, ") | model=", m,
-                  " | ", met, "<", alpha_sig,
+                  "SIG (F/M within ", model_groups$treatment, ") | model=", m,
+                  " | ", met, "<", current_alpha,
                   if (sig_heatmap_require_fc_cutoff) paste0(" & |log2FC|>=", fc_cutoff_log2) else "",
                   " | log2FC=log2(F/M) | scale=", heatmap_scale_method
                 )
@@ -833,14 +821,14 @@ run_untargeted_pipeline <- function() {
             }
 
             meta_wt <- metadata_aligned %>%
-              dplyr::filter(type == "Sample", model == m, group == comparison_group_control, sex %in% c("F", "M"))
+              dplyr::filter(type == "Sample", model == m, group == model_groups$control, sex %in% c("F", "M"))
             st_wt <- stats_5sets_by_model[[m]][["wt-f_vs_wt-m"]]
 
             if (!is.null(st_wt)) {
               out_png_wt <- file.path(
                 mp$plots$heatmap_significant_wt_f_vs_wt_m,
                 paste0(
-                  "HEATMAP_SIG_ACTIVE_", comparison_group_control, "_FvsM_", met, "_lt_", alpha_sig,
+                  "HEATMAP_SIG_ACTIVE_", model_groups$control, "_FvsM_", met, "_lt_", current_alpha,
                   "_model_", m, "_scale_", heatmap_scale_method, ".png"
                 )
               )
@@ -851,7 +839,7 @@ run_untargeted_pipeline <- function() {
                 variants$ACTIVE$feature,
                 st_wt,
                 sig_metric = met,
-                alpha_sig = alpha_sig,
+                alpha_sig = current_alpha,
                 fc_cutoff_log2 = fc_cutoff_log2,
                 require_fc_cutoff = sig_heatmap_require_fc_cutoff,
                 sig_max = sig_heatmap_max_features,
@@ -859,8 +847,8 @@ run_untargeted_pipeline <- function() {
                 order_samples_by_group = FALSE,
                 out_png = out_png_wt,
                 title_main = paste0(
-                  "SIG (F/M within ", comparison_group_control, ") | model=", m,
-                  " | ", met, "<", alpha_sig,
+                  "SIG (F/M within ", model_groups$control, ") | model=", m,
+                  " | ", met, "<", current_alpha,
                   if (sig_heatmap_require_fc_cutoff) paste0(" & |log2FC|>=", fc_cutoff_log2) else "",
                   " | log2FC=log2(F/M) | scale=", heatmap_scale_method
                 )

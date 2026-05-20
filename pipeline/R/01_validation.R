@@ -31,8 +31,8 @@ validate_settings <- function() {
   stopifnot(is.logical(use_reference_file), length(use_reference_file) == 1)
 
   if (isTRUE(use_reference_file)) {
-    stopifnot(is.character(comparison_path), length(comparison_path) == 1)
-    stopifnot(nzchar(trimws(comparison_path)))
+    stopifnot(is.character(reference_path), length(reference_path) == 1)
+    stopifnot(nzchar(trimws(reference_path)))
   }
 
   stopifnot(is.character(reference_col_metabolite), length(reference_col_metabolite) == 1)
