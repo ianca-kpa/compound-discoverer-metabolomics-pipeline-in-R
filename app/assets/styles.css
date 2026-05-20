@@ -37,6 +37,103 @@ body {
 	padding-right: 6px;
 }
 
+@media (max-width: 1200px) {
+	.layout-shell > .row {
+		display: flex;
+		flex-wrap: wrap;
+	}
+
+	.layout-shell > .row > [class*="col-"] {
+		width: 100%;
+		max-width: 100%;
+		flex: 0 0 100%;
+	}
+
+	.content-card {
+		margin-top: 12px;
+	}
+
+	.grid-2x2,
+	.grid-3x1,
+	.grid-3x2,
+	.settings-fields-grid,
+	.settings-columns-grid,
+	.settings-guide-list {
+		grid-template-columns: 1fr;
+	}
+
+	.settings-guide-list {
+		column-count: 1;
+	}
+
+	.settings-builder-shell {
+		gap: 10px;
+	}
+
+	.settings-section-card,
+	.settings-save-bar,
+	.settings-guide-card {
+		padding: 10px;
+	}
+
+	.hero {
+		padding: 16px 18px;
+	}
+
+	.content-card .tab-content {
+		padding: 12px;
+	}
+}
+
+@media (max-width: 768px) {
+	.app-shell {
+		padding: 0 8px;
+		margin-top: 10px;
+	}
+
+	.hero {
+		padding: 14px 16px;
+		border-radius: 14px;
+	}
+
+	.hero h2 {
+		font-size: 1.45rem;
+	}
+
+	.grid-2x2,
+	.grid-3x1,
+	.grid-3x2,
+	.settings-fields-grid,
+	.settings-columns-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.settings-section-card h5,
+	.control-card h4,
+	.tab-pane h4 {
+		font-size: 1rem;
+	}
+
+	.settings-save-bar {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.output-dir-row {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.output-dir-button-wrap,
+	.output-dir-input-wrap {
+		width: 100%;
+	}
+
+	.content-card .tab-content {
+		padding: 10px;
+	}
+}
+
 .hero {
 	background: linear-gradient(120deg, #0f766e 0%, #0b5d7f 52%, #9a3412 100%);
 	color: #ffffff;
@@ -169,11 +266,36 @@ body {
 	min-width: 0;
 }
 
+/* Align heatmap checkbox options to the same vertical height */
+label[for="settings_make_heatmap_by_model"],
+label[for="settings_make_heatmap_by_model_sex"] {
+	display: flex;
+ 	align-items: center;
+ 	height: 42px;
+}
+
+/* Keep the PCA and heatmap scale controls aligned on the same row. */
+label[for="settings_pca_scaling"],
+label[for="settings_heatmap_scale_method"] {
+	display: flex;
+	align-items: flex-end;
+	min-height: 42px;
+}
+
+/* Align Sanitize mode and Enable group ellipses to matching height */
+label[for="settings_sanitize_mode"],
+label[for="settings_ellipse_positive"] {
+	display: flex;
+ 	align-items: flex-end;
+ 	height: 42px;
+}
+
 .settings-fields-grid .form-control,
 .settings-fields-grid .selectize-control,
 .settings-fields-grid .shiny-input-container {
 	min-width: 0;
 	width: 100%;
+
 }
 
 .settings-header-row {
@@ -193,7 +315,7 @@ body {
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
-	border: 1px solid #dbe4ef;
+	border: 1px solid #267feb;
 	border-radius: 8px;
 	background: #f8fafc;
 	padding: 12px 14px;
@@ -472,6 +594,114 @@ body {
 	border-radius: 8px;
 	border: 1px solid #e5e7eb;
 	padding: 6px;
+}
+
+.results-preview-box {
+	width: 100%;
+	min-width: 0;
+}
+
+.results-preview-image {
+	display: block;
+	width: 100%;
+	max-width: 100%;
+	height: auto;
+	max-height: 70vh;
+	object-fit: contain;
+	background: #f8fafc;
+	border: 1px solid #e5e7eb;
+	border-radius: 10px;
+	padding: 8px;
+}
+
+.gallery-modal-shell {
+	position: relative;
+	width: fit-content;
+	max-width: 100%;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.gallery-modal-close-x {
+	position: absolute;
+	top: -12px;
+	right: -12px;
+	width: 34px;
+	height: 34px;
+	border: 0;
+	border-radius: 50%;
+	background: #da5454;
+	color: #1f2a37;
+	font-size: 24px;
+	font-weight: 700;
+	line-height: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	box-shadow: 0 4px 12px rgba(21, 42, 75, 0.18);
+	z-index: 10;
+}
+
+.gallery-modal-nav {
+	width: 52px;
+	height: 52px;
+	padding: 0;
+	border: 0;
+	border-radius: 50%;
+	background: #219ed8;
+	color: #1f2a37;
+	font-size: 42px;
+	font-weight: 400;
+	line-height: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: 0 4px 12px rgba(21, 42, 75, 0.16);
+}
+
+.gallery-modal-image-wrap {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	width: 100%;
+	min-width: 0;
+}
+
+.gallery-modal-image {
+	display: block;
+	max-width: calc(100vw - 180px);
+	max-height: 78vh;
+	width: auto;
+	height: auto;
+	object-fit: contain;
+	background: #f8fafc;
+	border: 1px solid #e5e7eb;
+	border-radius: 10px;
+	padding: 8px;
+}
+
+
+
+/* Make the Figure preview modal adapt to the opened image width */
+#shiny-modal .modal-dialog:has(.gallery-modal-shell) {
+	width: fit-content;
+	max-width: calc(100vw - 40px);
+	margin-left: auto;
+	margin-right: auto;
+}
+
+#shiny-modal .modal-dialog:has(.gallery-modal-shell) .modal-content {
+	width: fit-content;
+	max-width: calc(100vw - 40px);
+}
+
+.gallery-modal-shell {
+	width: fit-content;
+	max-width: 100%;
+	margin-left: auto;
+	margin-right: auto;
 }
 
 .small-note {
