@@ -9,130 +9,114 @@ gc()
 options(stringsAsFactors = FALSE)
 options(scipen = 999)
 
-cat("
-==================================================
-")
-cat("Untargeted metabolomics pipeline
-")
-cat("Runner started at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "
-")
-cat("==================================================
-")
+cat("\n==================================================\n")
+cat("Untargeted metabolomics pipeline\n")
+cat("Runner started at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+cat("==================================================\n")
 
 tryCatch(
   {
-    this_file <- if (!is.null(sys.frames()[[1]]$ofile)) sys.frames()[[1]]$ofile else "pipeline/run_pipeline.R"
-    script_dir <- normalizePath(dirname(this_file), winslash = "/", mustWork = FALSE)
-    project_dir <- normalizePath(file.path(script_dir, ".."), winslash = "/", mustWork = FALSE)
-    if (!dir.exists(project_dir)) project_dir <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-    setwd(project_dir)
+    locate_project_root <- function(start_paths) {
+      for (start_path in start_paths) {
+        if (is.null(start_path) || !nzchar(start_path)) {
+          next
+        }
 
-    cat("
-Current working directory:
-")
-    cat(getwd(), "
-")
+        current_path <- normalizePath(start_path, winslash = "/", mustWork = FALSE)
 
-        if (!file.exists("pipeline/config/settings.R")) {
-            stop("pipeline/config/settings.R not found. Copy pipeline/config/settings.example.R to pipeline/config/settings.R and edit it before running the pipeline.")
+        repeat {
+          settings_path <- file.path(current_path, "pipeline", "config", "settings.R")
+          if (file.exists(settings_path)) {
+            return(current_path)
+          }
+
+          parent_path <- normalizePath(file.path(current_path, ".."), winslash = "/", mustWork = FALSE)
+          if (identical(parent_path, current_path)) {
+            break
+          }
+
+          current_path <- parent_path
+        }
+      }
+
+      stop(
+        "Could not locate the project root. Open the repository root in RStudio, or make sure pipeline/config/settings.R exists."
+      )
     }
 
-    cat("
-[1/4] Loading settings.R ...
-")
-    source("pipeline/config/settings.R", local = .GlobalEnv)
-    cat("settings.R loaded successfully.
-")
+    this_file <- if (!is.null(sys.frames()[[1]]$ofile)) sys.frames()[[1]]$ofile else NA_character_
+    script_dir <- if (!is.na(this_file) && nzchar(this_file)) dirname(this_file) else NA_character_
+    project_dir <- locate_project_root(c(script_dir, getwd()))
+    setwd(project_dir)
 
-    cat("
-[2/4] Loading pipeline modules ...
-")
+    cat("\nCurrent working directory:\n")
+    cat(getwd(), "\n")
+
+    if (!file.exists("pipeline/config/settings.R")) {
+      stop("pipeline/config/settings.R not found. Copy pipeline/config/settings.example.R to pipeline/config/settings.R and edit it before running the pipeline.")
+    }
+
+    cat("\n[1/4] Loading settings.R ...\n")
+    source("pipeline/config/settings.R", local = .GlobalEnv)
+    cat("settings.R loaded successfully.\n")
+
+    cat("\n[2/4] Loading pipeline modules ...\n")
 
     module_files <- c(
-            "pipeline/R/00_packages.R",
-            "pipeline/R/01_validation.R",
-            "pipeline/R/02_comparisons.R",
-            "pipeline/R/03_helpers_io_log.R",
-            "pipeline/R/04_metadata.R",
-            "pipeline/R/05_features_assay.R",
-            "pipeline/R/06_normalization_filters.R",
-            "pipeline/R/07_duplicates.R",
-            "pipeline/R/08_exports.R",
-            "pipeline/R/09_pca.R",
-            "pipeline/R/10_stats_volcano.R",
-            "pipeline/R/11_heatmaps.R",
-            "pipeline/R/12_main_pipeline.R"
+      "pipeline/R/00_packages.R",
+      "pipeline/R/01_validation.R",
+      "pipeline/R/02_comparisons.R",
+      "pipeline/R/03_helpers_io_log.R",
+      "pipeline/R/04_metadata.R",
+      "pipeline/R/05_features_assay.R",
+      "pipeline/R/06_normalization_filters.R",
+      "pipeline/R/07_duplicates.R",
+      "pipeline/R/08_exports.R",
+      "pipeline/R/09_pca.R",
+      "pipeline/R/10_stats_volcano.R",
+      "pipeline/R/11_heatmaps.R",
+      "pipeline/R/12_main_pipeline.R"
     )
 
     for (f in module_files) {
-      cat("Loading:", f, "
-")
+      cat("Loading:", f, "\n")
       source(f, local = .GlobalEnv)
     }
 
-    cat("
-All modules loaded successfully.
-")
+    cat("\nAll modules loaded successfully.\n")
 
-    cat("
-[3/4] Validating configuration ...
-")
+    cat("\n[3/4] Validating configuration ...\n")
     validate_settings()
-    cat("Configuration OK.
-")
+    cat("Configuration OK.\n")
 
-    cat("[4/4] Running pipeline ...
-")
+    cat("[4/4] Running pipeline ...\n")
     pipeline_result <- run_untargeted_pipeline()
 
-#     cat("
-# ==================================================
-# ")
-    cat("Pipeline finished successfully.
-")
+    cat("Pipeline finished successfully.\n")
     cat("Finished at:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "")
-    cat("
-==================================================
-")
+    cat("\n==================================================\n")
 
     if (is.list(pipeline_result)) {
-      cat("
-Returned objects:
-")
-      cat(paste(names(pipeline_result), collapse = "
-"), "
-")
+      cat("\nReturned objects:\n")
+      cat(paste(names(pipeline_result), collapse = "\n"), "\n")
     }
 
     if (exists("output_dir")) {
-      cat("
-Output directory:
-")
-      cat(output_dir, "
-")
+      cat("\nOutput directory:\n")
+      cat(output_dir, "\n")
     }
 
     if (exists("pipeline_result") && is.list(pipeline_result) && "log_path" %in% names(pipeline_result)) {
-      cat("
-Log file:
-")
-      cat(pipeline_result$log_path, "
-")
+      cat("\nLog file:\n")
+      cat(pipeline_result$log_path, "\n")
     }
   },
   error = function(e) {
-    cat("
-==================================================
-")
-    cat("PIPELINE FAILED
-")
-    cat("Message:", conditionMessage(e), "
-")
-    cat("Time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "
-")
-    cat("
-==================================================
-")
+    cat("\n==================================================\n")
+    cat("PIPELINE FAILED\n")
+    cat("Message:", conditionMessage(e), "\n")
+    cat("Time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+    cat("\n==================================================\n")
     stop(e)
   }
 )
