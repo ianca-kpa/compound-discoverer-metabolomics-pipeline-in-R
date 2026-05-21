@@ -63,7 +63,7 @@ The workflow is orchestrated by `pipeline/run_pipeline.R` and modularized in `pi
 
 ## Requirements
 
-- R 4.5.3 (recommended)
+- R ≥ 4.5.3 (recommended)
 - RStudio Desktop (recommended)
 - Required CRAN packages are installed automatically by `pipeline/R/00_packages.R`
 
