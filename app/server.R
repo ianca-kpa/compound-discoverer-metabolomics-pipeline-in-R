@@ -5,6 +5,7 @@ server <- function(input, output, session) {
   install_status_text <- reactiveVal("Click the button to check and install required packages.")
   missing_packages_state <- reactiveVal(setdiff(required_packages, rownames(installed.packages())))
   initializing <- reactiveVal(TRUE)
+  clearing_inputs <- reactiveVal(FALSE)
 
   process_state <- reactiveValues(
     proc = NULL,
@@ -22,24 +23,17 @@ server <- function(input, output, session) {
   gallery_state <- reactiveValues(dir = NULL, prefix = NULL)
   session_started_at <- Sys.time()
   inputs_cleared_timestamp <- reactiveVal(NULL)
+  use_reference_file_last_state <- reactiveVal(FALSE)
 
-  session$onFlushed(function() {
-    initializing(TRUE)
-    default_cfg <- if (file.exists(example_config_path)) {
-      safe_read_file(example_config_path)
-    } else {
-      "# No default settings file found in config/."
-    }
+  reset_common_inputs <- function() {
     shinyjs::reset("data_file")
     shinyjs::reset("metadata_file")
     shinyjs::reset("reference_file")
     updateTextInput(session, "output_dir", value = "output")
     updateSelectInput(session, "duplicate_name_strategy", selected = "collapse_best_qc_rsd")
     updateSelectInput(session, "run_metrics", selected = "FDR_and_p_value")
-    updateSelectInput(session, "use_only_known", selected = "TRUE")
     updateSelectInput(session, "statistical_test_type", selected = "student")
     updateSelectInput(session, "test_is_paired", selected = "FALSE")
-    # pvalue_correction_method is derived from run_metrics when saving settings
     updateTextInput(session, "allowed_metadata_groups", value = "WT, TG")
     updateCheckboxInput(session, "use_reference_file", value = FALSE)
     updateCheckboxInput(session, "use_weight_normalization", value = FALSE)
@@ -49,9 +43,19 @@ server <- function(input, output, session) {
     updateCheckboxInput(session, "manual_reference_cols", value = FALSE)
     reset_metadata_columns()
     reset_reference_columns()
-    updateTextAreaInput(session, "config_text", value = default_cfg)
     selected_result_image(NULL)
     pipeline_log_text("No run executed yet.")
+    inputs_cleared_timestamp(Sys.time())
+  }
+
+  session$onFlushed(function() {
+    initializing(TRUE)
+    default_cfg <- if (file.exists(active_config_path)) {
+      safe_read_file(active_config_path)
+    } else {
+      "# No default settings file found in config/."
+    }
+    reset_common_inputs()
     status_message("Ready.")
     shinyjs::runjs("setTimeout(function() { Shiny.setInputValue('init_complete', true); }, 50);")
   })
@@ -354,27 +358,27 @@ server <- function(input, output, session) {
       Negate(is.null),
       list(
         make_section_card("Statistics thresholds"),
-        make_section_card("PCA and heatmap style")
+        make_section_card("Feature filtering and naming")
       )
     )
 
     right_cards <- Filter(
       Negate(is.null),
       list(
-        make_section_card("Plot generation"),
+        make_section_card("Heatmap"),
         make_section_card("Heatmap clustering"),
         tags$div(
-            class = "settings-section-card",
-            tags$h5("Save settings"),
-            tags$p(
-              class = "small-note",
-              "Persist the current form values into config/settings.R."
-            ),
-            actionButton(
-              "save_settings_form",
-              "Save config/settings.R from form"
-            )
+          class = "settings-section-card",
+          tags$h5("Save settings"),
+          tags$p(
+            class = "small-note",
+            "Persist the current form values into config/settings.R."
+          ),
+          actionButton(
+            "save_settings_form",
+            "Save config/settings.R from form"
           )
+        )
       )
     )
 
@@ -792,10 +796,9 @@ server <- function(input, output, session) {
   build_quick_config <- function(current_text) {
     cfg <- current_text
     allowed_groups <- parse_allowed_groups(input$allowed_metadata_groups)
-    duplicate_strategy_effective <- if (isTRUE(input$use_reference_file)) {
-      "reference_or_best_qc_rsd"
-    } else {
-      "collapse_best_qc_rsd"
+    duplicate_strategy_effective <- safe_trimws(as.character(input$duplicate_name_strategy)[1])
+    if (!nzchar(duplicate_strategy_effective)) {
+      duplicate_strategy_effective <- "collapse_best_qc_rsd"
     }
 
     cfg <- replace_or_append(cfg, "output_dir", dQuote(input$output_dir))
@@ -805,7 +808,6 @@ server <- function(input, output, session) {
     cfg <- replace_or_append(cfg, "fdr_cutoff", setting_value_numeric(input[[setting_input_id("fdr_cutoff")]], default = 0.05))
     cfg <- replace_or_append(cfg, "run_metrics", dQuote(input$run_metrics))
     cfg <- replace_or_append(cfg, "heatmap_rank_metrics", dQuote(input$run_metrics))
-    cfg <- replace_or_append(cfg, "use_only_known", if (identical(as.character(input$use_only_known)[1], "TRUE")) "TRUE" else "FALSE")
     cfg <- replace_or_append(cfg, "statistical_test_type", dQuote(input$statistical_test_type))
     cfg <- replace_or_append(cfg, "test_is_paired", if (identical(as.character(input$test_is_paired)[1], "TRUE")) "TRUE" else "FALSE")
     # Derive p-value correction method from run_metrics selection so that
@@ -1108,29 +1110,16 @@ server <- function(input, output, session) {
   }
 
   clear_all_inputs <- function() {
-    shinyjs::reset("data_file")
-    shinyjs::reset("metadata_file")
-    shinyjs::reset("reference_file")
+    clearing_inputs(TRUE)
+    on.exit({
+      clearing_inputs(FALSE)
+    }, add = TRUE)
+    reset_common_inputs()
     updateTextInput(session, "external_data_path", value = "")
     updateTextInput(session, "external_metadata_path", value = "")
     updateTextInput(session, "external_reference_path", value = "")
-    updateTextInput(session, "output_dir", value = "output")
-    updateSelectInput(session, "duplicate_name_strategy", selected = "collapse_best_qc_rsd")
-    updateSelectInput(session, "run_metrics", selected = "FDR_and_p_value")
-    updateSelectInput(session, "use_only_known", selected = "TRUE")
-    updateSelectInput(session, "statistical_test_type", selected = "student")
-    updateSelectInput(session, "test_is_paired", selected = "FALSE")
-    # pvalue_correction_method is derived from run_metrics when saving settings
-    updateTextInput(session, "allowed_metadata_groups", value = "WT, TG")
-    updateCheckboxInput(session, "use_reference_file", value = FALSE)
-    updateCheckboxInput(session, "use_weight_normalization", value = FALSE)
-    updateCheckboxInput(session, "minimal_output", value = FALSE)
-    updateCheckboxInput(session, "manual_metadata_cols", value = FALSE)
-    updateCheckboxInput(session, "manual_reference_cols", value = FALSE)
-    reset_metadata_columns()
-    reset_reference_columns()
-    cfg <- if (file.exists(example_config_path)) {
-      safe_read_file(example_config_path)
+    cfg <- if (file.exists(active_config_path)) {
+      safe_read_file(active_config_path)
     } else {
       read_initial_config()
     }
@@ -1138,16 +1127,13 @@ server <- function(input, output, session) {
     cfg <- replace_or_append(cfg, "metadata_path", dQuote(""))
     cfg <- replace_or_append(cfg, "reference_path", dQuote(""))
     updateTextAreaInput(session, "config_text", value = cfg)
-    selected_result_image(NULL)
     gallery_state$dir <- NULL
     gallery_state$prefix <- NULL
-    pipeline_log_text("No run executed yet.")
     process_state$log_file <- NULL
     process_state$pipeline_log_file <- NULL
     process_state$proc <- NULL
     process_state$running <- FALSE
     session_started_at <<- Sys.time()
-    inputs_cleared_timestamp(Sys.time())
     shinyjs::runjs("window.location.hash = '#data'; setTimeout(function() { window.location.hash = '#data'; }, 100);")
     status_message("All inputs cleared. Ready for a new analysis.")
   }
@@ -1188,18 +1174,25 @@ server <- function(input, output, session) {
     normalizePath(file.path(project_root, out), winslash = "/", mustWork = FALSE)
   }
 
-  resolve_input_file <- function(kind = c("data", "metadata", "reference"), prefer_mapped = TRUE) {
+  resolve_input_file <- function(
+    kind = c("data", "metadata", "reference"),
+    prefer_mapped = TRUE,
+    allow_config_fallback = TRUE
+  ) {
     kind <- match.arg(kind)
+
     uploaded <- switch(kind,
       data = input$data_file,
       metadata = input$metadata_file,
       reference = input$reference_file
     )
+
     external <- switch(kind,
       data = safe_trimws(input$external_data_path),
       metadata = safe_trimws(input$external_metadata_path),
       reference = safe_trimws(input$external_reference_path)
     )
+
     cfg_key <- switch(kind,
       data = "cd_file_path",
       metadata = "metadata_path",
@@ -1207,29 +1200,42 @@ server <- function(input, output, session) {
     )
 
     clear_ts <- inputs_cleared_timestamp()
+
     is_valid_current_file <- function(file_path) {
       if (is.null(file_path) || !file.exists(file_path)) {
         return(FALSE)
       }
+
+      file_mtime <- file.mtime(file_path)
+
       if (!is.null(clear_ts)) {
-        file_mtime <- file.mtime(file_path)
         return(file_mtime >= (clear_ts - 1))
       }
-      file_mtime <- file.mtime(file_path)
-      session_start <- session_started_at
-      file_mtime >= (session_start - 2)
+
+      file_mtime >= (session_started_at - 2)
     }
 
     if (identical(kind, "metadata") && isTRUE(prefer_mapped)) {
       mapping <- metadata_column_mapping()
-      uploaded_name <- if (!is.null(uploaded) && !is.null(uploaded$name)) uploaded$name else NULL
-      source_hint <- if (!is.null(uploaded) && !is.null(uploaded$datapath) && is_valid_current_file(uploaded$datapath)) {
-        uploaded$datapath
-      } else if (nzchar(external)) {
-        external
+
+      uploaded_name <- if (!is.null(uploaded) && !is.null(uploaded$name)) {
+        uploaded$name
       } else {
-        extract_config_value(input$config_text, cfg_key)
+        NULL
       }
+
+      source_hint <- NULL
+
+      if (!is.null(uploaded) &&
+        !is.null(uploaded$datapath) &&
+        is_valid_current_file(uploaded$datapath)) {
+        source_hint <- uploaded$datapath
+      } else if (nzchar(external)) {
+        source_hint <- external
+      } else if (isTRUE(allow_config_fallback)) {
+        source_hint <- extract_config_value(input$config_text, cfg_key)
+      }
+
       mapped_rel <- metadata_effective_rel_path(
         source_path = source_hint,
         uploaded_name = uploaded_name,
@@ -1238,13 +1244,16 @@ server <- function(input, output, session) {
 
       if (!is.null(mapped_rel)) {
         mapped_abs <- file.path(project_root, mapped_rel)
+
         if (file.exists(mapped_abs)) {
           return(mapped_abs)
         }
       }
     }
 
-    if (!is.null(uploaded) && !is.null(uploaded$datapath) && is_valid_current_file(uploaded$datapath)) {
+    if (!is.null(uploaded) &&
+      !is.null(uploaded$datapath) &&
+      is_valid_current_file(uploaded$datapath)) {
       return(uploaded$datapath)
     }
 
@@ -1252,15 +1261,20 @@ server <- function(input, output, session) {
       if (is_absolute_path(external)) {
         return(external)
       }
+
       return(file.path(project_root, external))
     }
 
-    from_cfg <- extract_config_value(input$config_text, cfg_key)
-    if (!is.null(from_cfg) && nzchar(from_cfg)) {
-      if (is_absolute_path(from_cfg)) {
-        return(from_cfg)
+    if (isTRUE(allow_config_fallback)) {
+      from_cfg <- extract_config_value(input$config_text, cfg_key)
+
+      if (!is.null(from_cfg) && nzchar(from_cfg)) {
+        if (is_absolute_path(from_cfg)) {
+          return(from_cfg)
+        }
+
+        return(file.path(project_root, from_cfg))
       }
-      return(file.path(project_root, from_cfg))
     }
 
     NULL
@@ -1345,6 +1359,13 @@ server <- function(input, output, session) {
     isTRUE(default)
   }
 
+  current_config_text <- function(fallback_text = input$config_text) {
+    if (file.exists(active_config_path)) {
+      return(safe_read_file(active_config_path))
+    }
+    fallback_text
+  }
+
   observeEvent(TRUE,
     {
       cfg <- input$config_text
@@ -1391,7 +1412,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$save_settings_form, {
-    cfg <- build_settings_builder_config(input$config_text)
+    cfg <- build_settings_builder_config(current_config_text())
     clean_config <- normalize_config_text(cfg)
     writeLines(clean_config, active_config_path, useBytes = TRUE)
     updateTextAreaInput(session, "config_text", value = clean_config)
@@ -1490,13 +1511,17 @@ server <- function(input, output, session) {
 
   observeEvent(input$use_reference_file,
     {
+      previous_use_reference_file <- isTRUE(use_reference_file_last_state())
+      current_use_reference_file <- isTRUE(input$use_reference_file)
+      use_reference_file_last_state(current_use_reference_file)
+
       if (isTRUE(input$use_reference_file)) {
         updateSelectInput(session, "duplicate_name_strategy", selected = "reference_or_best_qc_rsd")
         cfg <- input$config_text
         cfg <- replace_or_append(cfg, "use_reference_file", "TRUE")
         cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote("reference_or_best_qc_rsd"))
         updateTextAreaInput(session, "config_text", value = cfg)
-        if (!isTRUE(initializing())) {
+        if (!isTRUE(initializing()) && !previous_use_reference_file) {
           status_message("Reference file enabled: duplicate handling was automatically set to 'reference_or_best_qc_rsd'.")
         }
       }
@@ -1509,13 +1534,19 @@ server <- function(input, output, session) {
         cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote("collapse_best_qc_rsd"))
         cfg <- replace_or_append(cfg, "reference_path", dQuote(""))
         updateTextAreaInput(session, "config_text", value = cfg)
-        if (!isTRUE(initializing())) {
+        if (!isTRUE(initializing()) && !isTRUE(clearing_inputs()) && previous_use_reference_file) {
           status_message("Reference file disabled: duplicate handling reset to 'collapse_best_qc_rsd'.")
         }
       }
     },
     ignoreInit = TRUE
   )
+
+  observeEvent(input$duplicate_name_strategy, {
+    cfg <- input$config_text
+    cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(safe_trimws(as.character(input$duplicate_name_strategy)[1])))
+    updateTextAreaInput(session, "config_text", value = cfg)
+  }, ignoreInit = TRUE)
 
   observeEvent(input$manual_reference_cols,
     {
@@ -1623,7 +1654,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$save_config, {
-    save_config_and_inputs(input$config_text)
+    save_config_and_inputs(current_config_text())
     status_message("Saved config/settings.R and copied uploaded files to data/.")
   })
 
@@ -1772,7 +1803,7 @@ server <- function(input, output, session) {
       return()
     }
 
-    cfg_to_run <- build_quick_config(input$config_text)
+    cfg_to_run <- build_quick_config(current_config_text())
 
     if (isTRUE(action_confirm$ask_run)) {
       action_confirm$pending_run_cfg <- cfg_to_run
@@ -1809,7 +1840,7 @@ server <- function(input, output, session) {
 
       cfg_to_run <- action_confirm$pending_run_cfg
       if (is.null(cfg_to_run) || !nzchar(cfg_to_run)) {
-        cfg_to_run <- build_quick_config(input$config_text)
+        cfg_to_run <- build_quick_config(current_config_text())
       }
 
       action_confirm$pending_run_cfg <- NULL
@@ -2080,8 +2111,18 @@ server <- function(input, output, session) {
   })
 
   output$data_overview <- renderUI({
-    md_path <- resolve_input_file("metadata")
-    data_path <- resolve_input_file("data")
+    # Depend on inputs_cleared_timestamp() so overview is refreshed when inputs are cleared/opened
+    inputs_cleared_timestamp()
+
+    md_path <- resolve_input_file(
+      "metadata",
+      allow_config_fallback = FALSE
+    )
+
+    data_path <- resolve_input_file(
+      "data",
+      allow_config_fallback = FALSE
+    )
     allowed_groups <- unique(parse_allowed_groups(input$allowed_metadata_groups))
     allowed_groups_norm <- toupper(allowed_groups)
     metadata_mapping <- metadata_column_mapping()
@@ -2503,16 +2544,6 @@ server <- function(input, output, session) {
       gallery_state$prefix <- NULL
       gallery_state$out_dir <- NULL
     }
-
-    try(
-      {
-        config_path <- file.path(project_root, "config", "settings.R")
-        if (file.exists(config_path)) {
-          unlink(config_path)
-        }
-      },
-      silent = TRUE
-    )
 
     invisible(TRUE)
   }

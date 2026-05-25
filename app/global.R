@@ -25,7 +25,6 @@ library(bslib)
 # Load shared pipeline helpers when available
 helpers_path <- file.path(pipeline_root, "R", "03_helpers_io_log.R")
 if (file.exists(helpers_path)) source(helpers_path)
-example_config_path <- file.path(config_dir, "settings.example.R")
 active_config_path <- file.path(config_dir, "settings.R")
 
 if (dir.exists(app_assets_dir)) {
@@ -263,31 +262,32 @@ settings_form_sections <- list(
       list(key = "p_value_cutoff", label = "P-value cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
       list(key = "fdr_cutoff", label = "FDR cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
       list(key = "fc_cutoff_log2", label = "FC cutoff (log2)", type = "numeric", default = 0, step = 0.1, min = 0),
-      list(key = "ttest_variance_mode", label = "t-test variance mode", type = "select", choices = c("auto", "equal", "unequal"), default = "auto"),
-      list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 80, step = 1, min = 1)
+      list(key = "pca_scaling", label = "PCA scaling", type = "select", choices = c("none", "pareto", "autoscale"), default = "pareto"),
+      list(key = "ellipse_positive", label = "Enable group ellipses", type = "logical_select", default = TRUE)
     )
   ),
   list(
-    title = "Heatmap clustering",
+    title = "Heatmap",
     fields = list(
       list(key = "heatmap_cluster_distance", label = "Heatmap cluster distance", type = "select", choices = c("euclidean", "manhattan"), default = "euclidean"),
-      list(key = "heatmap_cluster_method", label = "Heatmap cluster method", type = "select", choices = c("ward.D2", "complete", "average"), default = "ward.D2")
-    )
-  ),
-  list(
-    title = "Plot generation",
-    fields = list(
+      list(key = "heatmap_cluster_method", label = "Heatmap cluster method", type = "select", choices = c("ward.D2", "complete", "average"), default = "ward.D2"),
+      list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1),
       list(key = "make_heatmap_by_model", label = "Heatmap by model", type = "logical_select", default = TRUE),
-      list(key = "make_heatmap_by_model_sex", label = "Heatmap by model and sex", type = "logical_select", default = TRUE)
+      list(key = "make_heatmap_by_model_sex", label = "Heatmap by model and sex", type = "logical_select", default = TRUE),
+      list(key = "heatmap_scale_method", label = "Heatmap scale method", type = "select", choices = c("none", "zscore", "pareto"), default = "zscore")
     )
   ),
+  # list(
+  #   title = "Plot generation",
+  #   fields = list(
+      
+  #   )
+  # ),
   list(
-    title = "PCA and heatmap style",
+    title = "Feature filtering and naming",
     fields = list(
-      list(key = "pca_scaling", label = "PCA scaling", type = "select", choices = c("none", "pareto", "autoscale"), default = "pareto"),
-      list(key = "heatmap_scale_method", label = "Heatmap scale method", type = "select", choices = c("none", "zscore", "pareto"), default = "zscore"),
-      list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("greek_latin_ascii", "ascii_translit"), default = "greek_latin_ascii"),
-      list(key = "ellipse_positive", label = "Enable group ellipses", type = "logical_select", default = TRUE)
+      list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = TRUE),
+      list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("greek_latin_ascii", "ascii_translit"), default = "greek_latin_ascii")
     )
   )
 )
@@ -301,7 +301,7 @@ settings_glossary_map <- c(
   p_value_cutoff = "Threshold used for p-value based stats and volcano significance.",
   fdr_cutoff = "Threshold used for FDR / adjusted p-value based stats and volcano significance.",
   fc_cutoff_log2 = "Minimum absolute log2 fold-change required where fold-change filtering is enabled; use 0 to disable.",
-  ttest_variance_mode = "Controls whether the t-test uses automatic variance checking, forced equal variance, or forced unequal variance.",
+  use_only_known = "If TRUE, only features with known identities are included in the analysis.",
   pca_scaling = "Scaling mode applied before PCA: none, pareto, or autoscale.",
   heatmap_top_n = "Maximum number of ranked features shown in top heatmaps.",
   dup_mz_digits = "Rounding precision for m/z during duplicate detection.",
@@ -311,17 +311,13 @@ settings_glossary_map <- c(
   make_heatmap_by_model_sex = "TRUE also generates top-ranked heatmaps split by sex.",
   heatmap_scale_method = "Scaling applied to heatmap matrices: none, zscore, or pareto.",
   heatmap_cluster_distance = "Recommended distance metric for heatmap clustering: euclidean or manhattan.",
-  heatmap_cluster_method = "Recommended hierarchical clustering method: ward.D2, complete, or average."
-  ,
+  heatmap_cluster_method = "Recommended hierarchical clustering method: ward.D2, complete, or average.",
   ellipse_positive = "If TRUE, group ellipses are drawn only when 'positive' condition is met; otherwise sex points are black and shapes indicate sex."
 )
 
 read_initial_config <- function() {
   if (file.exists(active_config_path)) {
     return(safe_read_file(active_config_path))
-  }
-  if (file.exists(example_config_path)) {
-    return(safe_read_file(example_config_path))
   }
   "# No settings file found in config/."
 }

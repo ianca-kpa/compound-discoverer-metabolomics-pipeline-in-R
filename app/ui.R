@@ -194,7 +194,7 @@ ui <- fluidPage(
           )
         ),
         div(
-          class = "grid-3x1",
+          class = "grid-2x2",
           selectInput(
             "duplicate_name_strategy",
             "Duplicate handling strategy",
@@ -208,28 +208,16 @@ ui <- fluidPage(
             selected = setting_display_value(initial_settings_text, "duplicate_name_strategy", default = "collapse_best_qc_rsd")
           ),
           selectInput(
-            "run_metrics",
-            "Run metrics",
-            choices = c("FDR", "p_value", "FDR_and_p_value"),
-            selected = setting_display_value(initial_settings_text, "run_metrics", default = "FDR_and_p_value")
-          ),
-          selectInput(
-            "use_only_known",
-            "Use only known metabolites",
-            choices = c("TRUE", "FALSE"),
-            selected = if (setting_display_logical(initial_settings_text, "use_only_known", default = TRUE)) "TRUE" else "FALSE"
-          )
-        ),
-        tags$hr(),
-        h4("Significance Testing"),
-        tags$p(class = "small-note", "Configure statistical test type, pairing, and p-value correction method."),
-        div(
-          class = "grid-3x1",
-          selectInput(
             "statistical_test_type",
             "Statistical test",
             choices = c("student", "welch", "wilcoxon", "limma"),
             selected = setting_display_value(initial_settings_text, "statistical_test_type", default = "student")
+          ),
+          selectInput(
+            "run_metrics",
+            "Run metrics",
+            choices = c("FDR", "p_value", "FDR_and_p_value"),
+            selected = setting_display_value(initial_settings_text, "run_metrics", default = "FDR_and_p_value")
           ),
           selectInput(
             "test_is_paired",
@@ -238,7 +226,6 @@ ui <- fluidPage(
             selected = if (setting_display_logical(initial_settings_text, "test_is_paired", default = FALSE)) "TRUE" else "FALSE"
           )
         )
-
       ),
       
       mainPanel(
@@ -271,7 +258,7 @@ ui <- fluidPage(
                   textAreaInput(
                     "config_text",
                     "settings.R content",
-                    value = read_initial_config(),
+                    value = initial_settings_text,
                     rows = 35,
                     width = "auto"
                   )
