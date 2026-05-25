@@ -153,6 +153,20 @@ pca_shape_values <- function(var_name, levels) {
   vals
 }
 
+pca_apply_legend_theme <- function(p) {
+  p + ggplot2::theme(
+    legend.position = "right",
+    legend.box = "vertical",
+    legend.title = ggplot2::element_text(size = 10),
+    legend.text = ggplot2::element_text(size = 9)
+  ) +
+    ggplot2::guides(
+      color = ggplot2::guide_legend(order = 1),
+      fill = ggplot2::guide_legend(order = 1),
+      shape = ggplot2::guide_legend(order = 2)
+    )
+}
+
 # -----------------------------------------------------------------------------
 # Draw and save one PCA plot
 # -----------------------------------------------------------------------------
@@ -395,6 +409,8 @@ plot_one_pca_subset <- function(mat_log2 = mat_log2,
     }
   }
 
+  p <- pca_apply_legend_theme(p)
+
   dir.create(dirname(out_png), recursive = TRUE, showWarnings = FALSE)
 
   ggplot2::ggsave(
@@ -543,67 +559,24 @@ plot_pca_per_model <- function(mat_log2 = mat_log2,
       } else {
         title_base <- paste0("PCA - model=", m, " | ", comp_label, " (", pca_scaling, ")")
 
-        if (identical(comp_name, "ALL_TGvsWT")) {
-          # produce two plots: ellipses by group, and ellipses by sex
-          out_png_group <- file.path(
+        ok <- plot_one_pca_subset(
+          mat_log2 = mat_log2,
+          meta = meta_sub,
+          out_png = file.path(
             out_dir,
-            paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_ellipse_by_group_scaling_", pca_scaling, ".png")
-          )
-
-          ok1 <- plot_one_pca_subset(
-            mat_log2 = mat_log2,
-            meta = meta_sub,
-            out_png = out_png_group,
-            title_main = paste0(title_base, " | ellipse=group"),
-            pca_scaling = pca_scaling,
-            color_var = cfg$pca_color_var,
-            shape_var = cfg$pca_shape_var,
-            ellipse_color_var = "group",
-            draw_ellipse = TRUE,
-            ellipse_positive = ellipse_positive,
-            log_path = log_path
-          )
-          if (isTRUE(ok1)) n_done <- n_done + 1
-
-          out_png_sex <- file.path(
-            out_dir,
-            paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_ellipse_by_sex_scaling_", pca_scaling, ".png")
-          )
-
-          ok2 <- plot_one_pca_subset(
-            mat_log2 = mat_log2,
-            meta = meta_sub,
-            out_png = out_png_sex,
-            title_main = paste0(title_base, " | ellipse=sex"),
-            pca_scaling = pca_scaling,
-            color_var = cfg$pca_color_var,
-            shape_var = cfg$pca_shape_var,
-            ellipse_color_var = "sex",
-            draw_ellipse = TRUE,
-            ellipse_positive = ellipse_positive,
-            log_path = log_path
-          )
-          if (isTRUE(ok2)) n_done <- n_done + 1
-        } else {
-      ok <- plot_one_pca_subset(
-        mat_log2 = mat_log2,
-        meta = meta_sub,
-        out_png = file.path(
-          out_dir,
-          paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, ".png")
-        ),
-        title_main = title_base,
-        pca_scaling = pca_scaling,
-        color_var = cfg$pca_color_var,
-        shape_var = cfg$pca_shape_var,
-        ellipse_color_var = cfg$pca_ellipse_color_var,
-        draw_ellipse = TRUE,
-        ellipse_positive = ellipse_positive,
-        log_path = log_path
-      )
-      if (isTRUE(ok)) n_done <- n_done + 1
-    }
-  }
+            paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, ".png")
+          ),
+          title_main = title_base,
+          pca_scaling = pca_scaling,
+          color_var = cfg$pca_color_var,
+          shape_var = cfg$pca_shape_var,
+          ellipse_color_var = cfg$pca_ellipse_color_var,
+          draw_ellipse = TRUE,
+          ellipse_positive = ellipse_positive,
+          log_path = log_path
+        )
+        if (isTRUE(ok)) n_done <- n_done + 1
+      }
     }
   }
 

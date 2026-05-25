@@ -202,8 +202,8 @@ draw_pheatmap_png <- function(mat_plot,
                               out_png,
                               title_main,
                               cluster_samples = FALSE,
-                              fontsize_row = 7,
-                              fontsize_col = 6,
+                              fontsize_row = 11,
+                              fontsize_col = 8,
                               angle_col = 45) {
   hm_colors <- make_bwr_palette(heatmap_palette_n)
   hm_breaks <- make_heatmap_breaks(
@@ -385,8 +385,8 @@ plot_heatmap_top_ttest_per_model <- function(mat_log2,
         out_png = out_png,
         title_main = title_main,
         cluster_samples = cluster_samples,
-        fontsize_row = 7,
-        fontsize_col = 7,
+        fontsize_row = 11,
+        fontsize_col = 8,
         angle_col = 45
       )
 
@@ -509,8 +509,8 @@ plot_sig_heatmap_from_stats <- function(mat_log2,
     out_png = out_png,
     title_main = title_main,
     cluster_samples = cluster_samples,
-    fontsize_row = 7,
-    fontsize_col = 6,
+    fontsize_row = 11,
+    fontsize_col = 8,
     angle_col = 45
   )
 

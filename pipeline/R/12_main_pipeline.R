@@ -675,7 +675,7 @@ run_untargeted_pipeline <- function() {
             meta_m <- metadata_aligned %>%
               dplyr::filter(type == "Sample", model == m, group %in% c(model_groups$control, model_groups$treatment))
 
-            st <- stats_5sets_by_model[[m]][["tg_vs_wt"]]
+            st <- stats_5sets_by_model[[m]][["ALL_TGvsWT"]]
             if (!is.null(st)) {
               out_png <- file.path(
                 mp$plots$heatmap_significant_all,
@@ -730,9 +730,9 @@ run_untargeted_pipeline <- function() {
                 dplyr::filter(type == "Sample", model == m, sex == sx, group %in% c(model_groups$control, model_groups$treatment))
 
               st <- if (sx == "F") {
-                stats_5sets_by_model[[m]][["tg-f_vs_wt-f"]]
+                stats_5sets_by_model[[m]][["F_TGvsWT"]]
               } else {
-                stats_5sets_by_model[[m]][["tg-m_vs_wt-m"]]
+                stats_5sets_by_model[[m]][["M_TGvsWT"]]
               }
 
               if (is.null(st)) next
@@ -787,7 +787,7 @@ run_untargeted_pipeline <- function() {
 
             meta_tg <- metadata_aligned %>%
               dplyr::filter(type == "Sample", model == m, group == model_groups$treatment, sex %in% c("F", "M"))
-            st_tg <- stats_5sets_by_model[[m]][["tg-f_vs_tg-m"]]
+            st_tg <- stats_5sets_by_model[[m]][["TG_FvsM"]]
 
             if (!is.null(st_tg)) {
               out_png_tg <- file.path(
@@ -822,7 +822,7 @@ run_untargeted_pipeline <- function() {
 
             meta_wt <- metadata_aligned %>%
               dplyr::filter(type == "Sample", model == m, group == model_groups$control, sex %in% c("F", "M"))
-            st_wt <- stats_5sets_by_model[[m]][["wt-f_vs_wt-m"]]
+            st_wt <- stats_5sets_by_model[[m]][["WT_FvsM"]]
 
             if (!is.null(st_wt)) {
               out_png_wt <- file.path(
