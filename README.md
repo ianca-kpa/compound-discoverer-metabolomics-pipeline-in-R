@@ -161,6 +161,17 @@ Results are written to `output/` (or to the folder defined by `output_dir`). Mai
 
 ---
 
+### Shiny application interface
+
+**Data overview panel**
+
+![Shiny application — Data overview panel](images/shiny-app-data-overview.png)
+
+**Settings builder panel**
+
+![Shiny application — Settings builder panel](images/shiny-app-settings-builder.png)
+
+---
 
 ## Examples
 
