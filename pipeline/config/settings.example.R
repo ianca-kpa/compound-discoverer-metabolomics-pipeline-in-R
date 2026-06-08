@@ -1,7 +1,7 @@
 # ==========================================================
 # SETTINGS FILE
 # Copy this file to:
-# config/settings.R
+# pipeline/config/settings.R
 #
 # Then edit the paths below before running the pipeline.
 # ==========================================================
@@ -31,12 +31,14 @@ comparison_group_treatment <- "TG"
 output_dir <- "output"
 
 # Weight normalization
+# If enabled, sample intensities are divided by the sample-weight column
+# detected or manually mapped from metadata before the main normalization step.
 use_weight_normalization <- FALSE              # options: TRUE/FALSE
 stop_on_invalid_weight <- TRUE                 # options: TRUE/FALSE
 invalid_weight_to_NA <- TRUE                   # options: TRUE/FALSE
 
 # Main normalization after optional weight normalization
-normalization_mode <- "none"                    # options: "none", "PQN", or "QC_LOESS"
+normalization_mode <- "none"                    # options: "none", "PQN", or "QC_LOESS" ("LOESS" is accepted as a legacy alias for "QC_LOESS")
 loess_min_qc_points <- 5                       # minimum valid QC points per feature for QC-LOESS
 QC_LOESS_span <- 0.75                          # LOESS smoothing span for QC-LOESS
 
@@ -45,7 +47,10 @@ missing_exclusion_max_fraction <- 0.50         # options: 0..1 (set >=1 to disab
 presence_filter_min_fraction <- 0.00           # options: 0..1
 impute_half_min <- TRUE                        # options: TRUE/FALSE
 
-# QC RSD thresholds (variant creation)
+# RSD thresholds (variant creation)
+# "qc_rsd" creates variants such as QC_RSD20 from QC sample RSD.
+# "rsd" creates variants such as RSD20 from biological/sample RSD.
+# "none" uses BASE and skips RSD-based variant filtering.
 rsd_filter_metric <- "none"                    # options: "none", "qc_rsd", "rsd"
 rsd_thresholds <- c(20)                        # options: c(10,15,20,30,...) etc.
 active_variant <- "BASE"                       # options: "BASE", paste0("QC_RSD", rsd_thresholds), or paste0("RSD", rsd_thresholds)
@@ -73,6 +78,8 @@ pvalue_correction_method <- "FDR"              # options: "raw", "FDR", "Bonferr
 use_only_known <- TRUE                         # options: TRUE/FALSE
 
 # Duplicate metabolite handling
+# reference_or_best_qc_rsd uses the reference table to choose the closest RT
+# match for duplicate named metabolites, then falls back to best QC RSD.
 duplicate_name_strategy <- "collapse_best_qc_rsd"   # options: "reference_or_best_qc_rsd"; "keep_separate"; "collapse_mean"; "collapse_sum"; "collapse_best_qc_rsd"
 
 # Duplicate rounding
@@ -176,4 +183,4 @@ sanitize_names_for_exports <- TRUE               # options: TRUE/FALSE
 sanitize_mode <- "greek_latin_ascii"             # options: "none", "greek_latin_ascii" or "ascii_translit"
 
 # Output control
-minimal_output <- FALSE                          # options: TRUE/FALSE. If TRUE, only exports a minimal set of results (mostly tables, no plots).
+minimal_output <- FALSE                          # options: TRUE/FALSE. If TRUE, selected plots/statistics are kept while selected intermediate global exports are skipped.

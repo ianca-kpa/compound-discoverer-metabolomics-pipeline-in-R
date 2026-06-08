@@ -290,51 +290,95 @@ setting_has_value <- function(value) {
 
 settings_form_sections <- list(
   list(
-    title = "Normalization",
+    title = "Processing setup",
     fields = list(
-      list(key = "normalization_mode", label = "Main normalization", type = "select", choices = c("none", "PQN", "QC_LOESS"), default = "none"),
-      list(key = "loess_min_qc_points", label = "LOESS minimum QC points", type = "integer", default = 5, step = 1, min = 5),
-      list(key = "QC_LOESS_span", label = "QC-LOESS span", type = "numeric", default = 0.75, step = 0.05, min = 0.05, max = 1)
-    )
-  ),
-  list(
-    title = "RSD and IQR filters",
-    fields = list(
-      list(key = "rsd_filter_metric", label = "RSD filter metric", type = "select", choices = c("none", "qc_rsd", "rsd"), default = "none"),
-      list(key = "rsd_thresholds", label = "RSD thresholds", type = "vector_numeric", default = c(20), placeholder = "Example: 10, 15, 20, 30"),
-      list(key = "active_variant", label = "Active variant", type = "selectize_text", default = "BASE", choices = c("BASE", "QC_RSD10", "QC_RSD15", "QC_RSD20", "QC_RSD30", "RSD10", "RSD15", "RSD20", "RSD30")),
-      list(key = "low_variance_filter_method", label = "Low-variance filter", type = "select", choices = c("none", "iqr"), default = "none"),
-      list(key = "low_variance_filter_fraction", label = "IQR removal fraction", type = "numeric", default = 0.20, step = 0.05, min = 0, max = 1)
+      list(
+        key = "normalization_mode",
+        label = "Main normalization",
+        type = "select",
+        choices = c("none", "PQN", "QC_LOESS"),
+        default = "none"
+      ),
+      list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = FALSE),
+      list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("none", "greek_latin_ascii", "ascii_translit"), default = "none"),
+      list(
+        key = "rsd_filter_metric",
+        label = "RSD filter metric",
+        type = "select",
+        choices = c("none", "qc_rsd", "rsd"),
+        default = "none"
+      ),
+      list(
+        key = "rsd_thresholds",
+        label = "RSD thresholds",
+        type = "vector_numeric",
+        default = c(20),
+        placeholder = "Example: 10, 15, 20, 30"
+      ),
+      list(
+        key = "active_variant",
+        label = "Active variant",
+        type = "selectize_text",
+        default = "BASE",
+        choices = c("BASE", "QC_RSD10", "QC_RSD15", "QC_RSD20", "QC_RSD30", "RSD10", "RSD15", "RSD20", "RSD30")
+      ),
+      list(
+        key = "low_variance_filter_method",
+        label = "Low-variance filter",
+        type = "select",
+        choices = c("none", "iqr"),
+        default = "none"
+      ),
+      list(
+        key = "low_variance_filter_fraction",
+        label = "IQR removal fraction",
+        type = "numeric",
+        default = 0.20,
+        step = 0.05,
+        min = 0,
+        max = 1
+      ),
+      list(
+        key = "duplicate_name_strategy",
+        label = "Duplicate handling strategy",
+        type = "select",
+        choices = c("reference_or_best_qc_rsd", "keep_separate", "collapse_mean", "collapse_sum", "collapse_best_qc_rsd"),
+        default = "collapse_best_qc_rsd"
+      )
     )
   ),
   list(
     title = "Statistics thresholds",
     fields = list(
+      list(key = "statistical_test_type", label = "Statistical test", type = "select", choices = c("student", "welch", "wilcoxon", "limma"), default = "student"),
+      list(key = "test_is_paired", label = "Paired test", type = "select", choices = c("Unpaired" = "FALSE", "Paired" = "TRUE"), default = "FALSE"),
+      list(key = "run_metrics", label = "Run metrics", type = "select", choices = c("FDR", "p_value", "FDR_and_p_value"), default = "FDR_and_p_value"),
       list(key = "p_value_cutoff", label = "P-value cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
       list(key = "fdr_cutoff", label = "FDR cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
       list(key = "fc_cutoff_log2", label = "FC cutoff (log2)", type = "numeric", default = 0, step = 0.1, min = 0)
     )
   ),
   list(
-    title = "PCA",
+    title = "Plots and figures",
     fields = list(
       list(key = "pca_scaling", label = "PCA scaling", type = "select", choices = c("none", "pareto", "autoscale"), default = "pareto"),
-      list(key = "ellipse_positive", label = "Enable group ellipses", type = "logical_select", default = TRUE)
-    )
-  ),
-  list(
-    title = "Heatmap",
-    fields = list(
+      list(key = "ellipse_positive", label = "Enable group ellipses", type = "logical_select", default = TRUE),
+      list(key = "heatmap_scale_method", label = "Heatmap scale", type = "select", choices = c("none", "zscore", "pareto"), default = "pareto"),
       list(key = "heatmap_cluster_distance", label = "Heatmap cluster distance", type = "select", choices = c("euclidean", "manhattan"), default = "euclidean"),
       list(key = "heatmap_cluster_method", label = "Heatmap cluster method", type = "select", choices = c("ward.D2", "complete", "average"), default = "ward.D2"),
-      list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1)
+      list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1),
+      list(key = "make_volcano_plots", label = "Make volcano plots", type = "logical_select", default = TRUE),
+      list(key = "volcano_add_labels", label = "Add volcano labels", type = "logical_select", default = TRUE),
+      list(key = "volcano_style", label = "Volcano style", type = "select", choices = c("classic", "gradual", "both"), default = "classic")
     )
   ),
   list(
-    title = "Feature filtering and naming",
+    title = "Output controls",
     fields = list(
-      list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = FALSE),
-      list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("none", "greek_latin_ascii", "ascii_translit"), default = "none")
+      list(key = "export_metaboanalyst_ready", label = "Export MetaboAnalyst table", type = "logical_select", default = TRUE),
+      list(key = "save_stats_excel_per_model", label = "Save stats Excel per model", type = "logical_select", default = TRUE),
+      list(key = "save_sig_metabolites_txt_per_model", label = "Save significant metabolite TXT", type = "logical_select", default = TRUE),
+      list(key = "minimal_output", label = "Minimal output", type = "logical_select", default = FALSE)
     )
   )
 )
@@ -343,19 +387,15 @@ settings_builder_layout <- list(
   run_setup = list(
     label = "Run setup",
     sections = c(
-      "Statistics thresholds",
-      "Normalization",
-      "Feature filters"
+      "Processing setup",
+      "Statistics thresholds"
     ),
-    widths = c(6, 6, 12)
+    widths = c(12, 12)
   ),
   visual_outputs = list(
     label = "Visual outputs",
-    sections = c(
-      "Heatmap",
-      "PCA"
-    ),
-    widths = c(6, 6)
+    sections = c("Plots and figures"),
+    widths = c(12)
   ),
   exports = list(
     label = "Exports",
@@ -365,46 +405,51 @@ settings_builder_layout <- list(
   ),
   field_columns = c(
     default = 2,
-    "Output controls" = 3,
-    "PCA" = 2,
-    "Normalization" = 2,
-    "Feature filters" = 3,
-    "RSD and IQR filters" = 3,
-    "Feature filtering and naming" = 2,
+    "Processing setup" = 3,
     "Statistics thresholds" = 3,
-    "Heatmap" = 3
+    "Plots and figures" = 3,
+    "Output controls" = 3
   )
 )
 
 settings_glossary_map <- c(
-  use_reference_file = "Enables reference-table matching for duplicate handling.",
-  output_dir = "Defines where all run outputs are written.",
-  use_weight_normalization = "Applies sample-weight normalization before downstream analysis.",
-  normalization_mode = "Main normalization after optional weight normalization: none keeps the post-weight matrix, PQN applies QC-reference PQN, and QC_LOESS corrects signal drift using QC samples.",
+  use_reference_file = "Enables reference-table matching for duplicate handling. When disabled, duplicate handling falls back to the selected non-reference strategy.",
+  output_dir = "Defines where all run outputs, logs, audits, tables, and figures are written.",
+  use_weight_normalization = "Applies sample-weight normalization before the main normalization step. The weight column is read from metadata.",
+  normalization_mode = "Main normalization after optional weight normalization: none keeps the post-weight matrix, PQN applies QC-reference probabilistic quotient normalization, and QC_LOESS corrects signal drift using QC samples.",
   loess_min_qc_points = "Minimum number of valid QC values required for a feature to receive QC-LOESS drift correction.",
-  QC_LOESS_span = "LOESS smoothing span for QC-LOESS; smaller values follow local drift more closely, larger values smooth more strongly.",
-  rsd_filter_metric = "Controls RSD-based feature filtering: none keeps BASE, qc_rsd filters using QC sample RSD, and rsd filters using biological/sample RSD.",
+  QC_LOESS_span = "LOESS smoothing span for QC-LOESS. Smaller values follow local drift more closely; larger values smooth more strongly.",
+  rsd_filter_metric = "Controls RSD-based variant creation: none keeps BASE, qc_rsd filters by QC sample RSD, and rsd filters by biological/sample RSD.",
   rsd_thresholds = "Numeric RSD cutoffs used to create variants such as QC_RSD20 or RSD20.",
-  active_variant = "Selects which RSD-filtered variant is used downstream. BASE disables RSD filtering.",
-  low_variance_filter_method = "Low-variance feature filtering method. none disables it; iqr removes the lowest-IQR fraction.",
+  active_variant = "Selects which RSD-filtered variant is used downstream for duplicate handling, statistics, plots, and exports. BASE disables RSD filtering.",
+  low_variance_filter_method = "Low-variance feature filtering method. none disables it; iqr removes features with the lowest interquartile range.",
   low_variance_filter_fraction = "Fraction of lowest-IQR features removed when low_variance_filter_method is iqr.",
-  duplicate_name_strategy = "Sets how duplicate features are merged or kept.",
+  duplicate_name_strategy = "Sets how duplicate named features are merged or kept: reference matching, best QC RSD, mean, sum, or separate features.",
   run_metrics = "Selects the significance metric used in run-level decisions and rankings.",
   p_value_cutoff = "Raw p-value threshold used for significance decisions, volcano highlighting, and p-value ranked outputs.",
   fdr_cutoff = "Adjusted p-value threshold used for FDR significance decisions, volcano highlighting, and FDR ranked outputs.",
   fc_cutoff_log2 = "Minimum absolute log2 fold-change required when fold-change filtering is enabled; use 0 to disable the fold-change requirement.",
+  statistical_test_type = "Statistical test used for group comparisons: student, welch, wilcoxon, or limma.",
+  test_is_paired = "Controls whether group comparisons use paired testing where supported. Unpaired is the default for independent samples.",
   use_only_known = "If TRUE, removes features without a known/canonical name before downstream statistics and plots.",
   pca_scaling = "Scaling applied before PCA: none leaves variables unchanged, pareto divides by sqrt(SD), and autoscale divides by SD.",
+  ellipse_positive = "Controls PCA ellipse rendering behavior; when TRUE, group ellipses are drawn only for eligible comparisons.",
   heatmap_top_n = "Maximum number of top-ranked features shown in each top heatmap.",
+  heatmap_scale_method = "Scaling applied to heatmap matrices: none, zscore, or pareto.",
+  heatmap_cluster_distance = "Distance metric used for heatmap clustering: euclidean or manhattan.",
+  heatmap_cluster_method = "Hierarchical clustering linkage used for heatmaps: ward.D2, complete, or average.",
   dup_mz_digits = "Rounding precision for m/z during duplicate detection.",
   dup_rt_digits = "Rounding precision for RT during duplicate detection.",
   sanitize_mode = "Text handling for exported feature names: none preserves characters, greek_latin_ascii transliterates Greek/Latin to ASCII, and ascii_translit uses general ASCII transliteration.",
   make_heatmap_by_model = "TRUE generates top-ranked heatmaps per model.",
   make_heatmap_by_model_sex = "TRUE also generates top-ranked heatmaps split by sex.",
-  heatmap_scale_method = "Scaling applied to heatmap matrices: none, zscore, or pareto.",
-  heatmap_cluster_distance = "Distance metric used for heatmap clustering: euclidean or manhattan.",
-  heatmap_cluster_method = "Hierarchical clustering linkage used for heatmaps: ward.D2, complete, or average.",
-  ellipse_positive = "Controls PCA ellipse rendering behavior; when TRUE, group ellipses are drawn only for eligible comparisons."
+  export_metaboanalyst_ready = "TRUE exports a MetaboAnalyst-ready table for downstream enrichment analysis.",
+  save_stats_excel_per_model = "TRUE saves an Excel workbook with statistics split by model and comparison.",
+  save_sig_metabolites_txt_per_model = "TRUE saves plain-text lists of significant metabolites for each comparison.",
+  make_volcano_plots = "TRUE generates volcano plot figures for configured comparisons.",
+  volcano_style = "Volcano plot style: classic, gradual, or both.",
+  volcano_add_labels = "TRUE adds labels to selected/significant volcano plot points.",
+  minimal_output = "TRUE keeps selected plots/statistics while skipping selected intermediate global exports."
 )
 
 read_initial_config <- function() {

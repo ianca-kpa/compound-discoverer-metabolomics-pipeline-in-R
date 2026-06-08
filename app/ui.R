@@ -28,7 +28,7 @@ ui <- fluidPage(
       class = "hero",
       tags$h2("Compound Discoverer Refinement and Metabolomics Pipeline"),
       tags$p(
-        "Control panel for inputs, settings, MetaboAnalyst-ready exports, and real-time pipeline execution logs."
+        "Control panel for data upload, normalization, filtering, statistics, MetaboAnalyst-ready exports, and real-time pipeline logs."
       )
     ),
     div(
@@ -46,7 +46,7 @@ ui <- fluidPage(
         tags$hr(),
 
         h4("Inputs"),
-        tags$p(class = "small-note", "Upload your data, metadata, and reference files here. Accepted formats are CSV, TSV, TXT, XLSX, and XLS. Uploaded files will be copied to the 'data' directory in the project root."),
+        tags$p(class = "small-note", "Upload the Compound Discoverer export, metadata, and optional reference table. Accepted formats are CSV, TSV, TXT, XLSX, and XLS. Uploaded files are copied to the project 'data' directory and written into settings.R."),
         div(
           class = "big-file-input",
           fileInput(
@@ -99,7 +99,7 @@ ui <- fluidPage(
           tagList(
             "Weight normalization",
             tags$span(
-              "   → Weight normalization controls weight-based scaling.",
+              "   -> divides each sample by its metadata weight before the main normalization step.",
               class = "small-note"
             )
           ),
@@ -130,7 +130,7 @@ ui <- fluidPage(
             condition = "input.manual_reference_cols == true",
             tags$p(
               class = "small-note",
-              "If column names vary, set them manually below. Leave blank to auto-detect."
+              "If reference column names vary, set them manually below. Leave blank to auto-detect metabolite/name, reference ion, m/z, and RT columns."
             ),
             div(
               class = "grid-2x2",
@@ -146,7 +146,7 @@ ui <- fluidPage(
           condition = "input.use_reference_file == false",
           tags$p(
             class = "small-note",
-            "Reference file disabled. Reference input and manual reference-column settings are hidden."
+            "Reference file disabled. Duplicate handling will use the selected non-reference strategy, usually best QC RSD."
           )
         ),
         tags$hr(),
@@ -169,57 +169,9 @@ ui <- fluidPage(
           ),
           textOutput("output_dir_status")
         ),
-        checkboxInput(
-          "minimal_output",
-          tagList(
-            "Minimal output",
-            tags$span(
-              "   → keeps plots/statistics based on selected options; skips selected intermediate global exports.",
-              class = "small-note"
-            )
-          ),
-          value = setting_display_logical(initial_settings_text, "minimal_output", default = FALSE)
-        ),
-        conditionalPanel(
-          condition = "input.minimal_output == true",
-          tags$div(
-            class = "small-note",
-            style = "margin-top:6px; color:#9a3412;",
-            "Minimal output enabled: plots and statistics are kept according to your selected options. Only selected intermediate global exports are skipped."
-          )
-        ),
-        div(
-          class = "grid-2x2",
-          selectInput(
-            "duplicate_name_strategy",
-            "Duplicate handling strategy",
-            choices = c(
-              "reference_or_best_qc_rsd",
-              "keep_separate",
-              "collapse_mean",
-              "collapse_sum",
-              "collapse_best_qc_rsd"
-            ),
-            selected = setting_display_value(initial_settings_text, "duplicate_name_strategy", default = "collapse_best_qc_rsd")
-          ),
-          selectInput(
-            "statistical_test_type",
-            "Statistical test",
-            choices = c("student", "welch", "wilcoxon", "limma"),
-            selected = setting_display_value(initial_settings_text, "statistical_test_type", default = "student")
-          ),
-          selectInput(
-            "run_metrics",
-            "Run metrics",
-            choices = c("FDR", "p_value", "FDR_and_p_value"),
-            selected = setting_display_value(initial_settings_text, "run_metrics", default = "FDR_and_p_value")
-          ),
-          selectInput(
-            "test_is_paired",
-            "Test type",
-            choices = c("Unpaired" = "FALSE", "Paired" = "TRUE"),
-            selected = if (setting_display_logical(initial_settings_text, "test_is_paired", default = FALSE)) "TRUE" else "FALSE"
-          )
+        tags$p(
+          class = "small-note",
+          "Analysis options are configured in the Settings Builder cards."
         )
       ),
       
@@ -245,7 +197,7 @@ ui <- fluidPage(
               id = "settings_subtabs",
               tabPanel(
                 "Settings form",
-                tags$p("Use the form below to configure key variables with standardized input fields.  The variable guide is in the other tab."),
+                tags$p("Use the form below to configure the most common run settings. The variable guide explains what each field controls."),
                 uiOutput("settings_builder_ui"),
                 tags$div(
                   style = "display:none;",
@@ -255,14 +207,14 @@ ui <- fluidPage(
               ),
               tabPanel(
                 "Variable guide",
-                tags$p("Use this guide to check what each variable controls before editing the form."),
+                tags$p("Use this guide to check normalization, filtering, duplicate-handling, statistics, PCA, and heatmap settings before editing the form."),
                 uiOutput("settings_glossary_ui")
               )
             )
           ),
           tabPanel(
             "Pipeline Log",
-            tags$p("Run pipeline from UI and inspect the latest execution log."),
+            tags$p("Run the pipeline from the app and inspect the latest execution log as it updates."),
             tags$pre(
               id = "pipeline_log_box",
               style = "max-height: 850px; overflow-y: auto; background: #111; color: #f2f2f2; padding: 12px;",
@@ -290,7 +242,7 @@ ui <- fluidPage(
             h4("QC/PCA comparison"),
             tags$p(
               class = "small-note",
-              "RSD, drift residual, technical/biological PCA, and retained feature counts from the latest run."
+              "Retained features, QC/sample RSD, IQR filtering, QC-LOESS drift audit, and PCA figure counts from the latest run."
             ),
             tableOutput("qc_pca_comparison_summary"),
             tags$hr(),

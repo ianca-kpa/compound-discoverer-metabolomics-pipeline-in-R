@@ -372,6 +372,45 @@ label[for="settings_ellipse_positive"] {
 
 }
 
+.settings-fields-grid select,
+.settings-fields-grid select option {
+	background: #ffffff;
+	color: var(--ink);
+}
+
+.settings-fields-grid .selectize-input {
+	min-height: 38px;
+	color: var(--ink);
+	background: #ffffff;
+	white-space: normal;
+}
+
+.settings-fields-grid .selectize-dropdown {
+	z-index: 2000;
+	width: auto !important;
+	min-width: 100%;
+	max-width: min(720px, calc(100vw - 32px));
+	background: #ffffff;
+	color: var(--ink);
+	border: 1px solid var(--border);
+	box-shadow: 0 10px 24px rgba(21, 42, 75, 0.18);
+}
+
+.settings-fields-grid .selectize-dropdown .option,
+.settings-fields-grid .selectize-dropdown .create {
+	color: var(--ink);
+	background: #ffffff;
+	white-space: normal;
+	line-height: 1.25;
+	padding: 8px 10px;
+}
+
+.settings-fields-grid .selectize-dropdown .active,
+.settings-fields-grid .selectize-dropdown .option:hover {
+	color: #ffffff;
+	background: var(--accent);
+}
+
 .settings-header-row {
 	flex-wrap: wrap;
 }

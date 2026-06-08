@@ -3,14 +3,18 @@
 # Normalization + filters
 # =============================================================================
 
-# Normalization and filtering functions for the assay data, including:
-# - Weight normalization (normalize_by_weight)
-# - Probabilistic Quotient Normalization (normalize_pqn_qc_ref)
-# - QC-LOESS signal drift correction (normalize_qc_loess)
+# Normalization is applied in two stages by the main pipeline:
+# optional sample-weight normalization, then the selected main normalization
+# mode ("none", "PQN", or "QC_LOESS").
+#
+# Functions in this module include:
+# - Weight normalization by metadata sample weight (normalize_by_weight)
+# - Probabilistic Quotient Normalization using QC samples (normalize_pqn_qc_ref)
+# - QC-LOESS injection-order drift correction (normalize_qc_loess)
 # - Missing value exclusion (filter_missing_exclusion)
 # - Presence filtering and imputation (presence_filter_and_impute)
 # - Known-only filtering (filter_known)
-# - Low-variance filtering (filter_low_variance_deterministic
+# - Low-variance IQR filtering (filter_low_variance_deterministic)
 # - RSD calculation (calc_rsd, calc_qc_rsd)
 
 normalize_by_weight <- function(assay_num_raw, metadata_aligned, sample_idx,

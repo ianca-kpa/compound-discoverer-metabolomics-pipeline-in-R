@@ -108,8 +108,6 @@ Important settings:
 - `duplicate_name_strategy`: controls how duplicate named features are kept or collapsed
 - `use_weight_normalization`: divides sample intensities by sample weight before main normalization
 - `normalization_mode`: chooses `none`, `PQN`, or `QC_LOESS`
-- `missing_exclusion_max_fraction`: removes features with too much missingness
-- `presence_filter_min_fraction`: requires a minimum sample-presence fraction
 - `rsd_filter_metric`, `rsd_thresholds`, and `active_variant`: create and select QC RSD or sample RSD variants
 - `low_variance_filter_method` and `low_variance_filter_fraction`: optionally remove the lowest-IQR features
 - `p_value_cutoff`, `fdr_cutoff`, and `fc_cutoff_log2`: statistical and plotting thresholds

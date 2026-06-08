@@ -31,16 +31,14 @@ server <- function(input, output, session) {
     shinyjs::reset("metadata_file")
     shinyjs::reset("reference_file")
     updateTextInput(session, "output_dir", value = "output")
-    updateSelectInput(session, "duplicate_name_strategy", selected = "collapse_best_qc_rsd")
-    updateSelectInput(session, "run_metrics", selected = "FDR_and_p_value")
-    updateSelectInput(session, "statistical_test_type", selected = "student")
-    updateSelectInput(session, "test_is_paired", selected = "FALSE")
+    updateSelectInput(session, setting_input_id("duplicate_name_strategy"), selected = "collapse_best_qc_rsd")
+    updateSelectInput(session, setting_input_id("run_metrics"), selected = "FDR_and_p_value")
+    updateSelectInput(session, setting_input_id("statistical_test_type"), selected = "student")
+    updateSelectInput(session, setting_input_id("test_is_paired"), selected = "FALSE")
     updateCheckboxInput(session, "use_reference_file", value = FALSE)
     updateCheckboxInput(session, "use_weight_normalization", value = FALSE)
-    updateSelectInput(session, "normalization_mode", selected = "none")
-    updateNumericInput(session, "loess_min_qc_points", value = 5)
-    updateNumericInput(session, "QC_LOESS_span", value = 0.75)
-    updateCheckboxInput(session, "minimal_output", value = FALSE)
+    updateSelectInput(session, setting_input_id("normalization_mode"), selected = "none")
+    updateSelectInput(session, setting_input_id("minimal_output"), selected = "FALSE")
     updateCheckboxInput(session, "manual_metadata_cols", value = FALSE)
     updateCheckboxInput(session, "show_metadata_column_fields", value = FALSE)
     updateCheckboxInput(session, "manual_reference_cols", value = FALSE)
@@ -79,6 +77,10 @@ server <- function(input, output, session) {
 
       showModal(modalDialog(
         title = "Weight normalization",
+        tags$p(
+          class = "small-note",
+          "When enabled, each biological sample is scaled by its metadata weight before the selected main normalization mode is applied."
+        ),
         radioButtons(
           "modal_weight_norm_choice",
           "Apply weight normalization to samples?",
@@ -107,6 +109,22 @@ server <- function(input, output, session) {
     } else {
       status_message("Minimal output disabled: full set of outputs (including detailed plots/exports) will be generated.")
     }
+  }
+
+  setting_input_text <- function(key, default = "") {
+    value <- input[[setting_input_id(key)]]
+    if (is.null(value) || length(value) == 0 || all(is.na(value)) || !nzchar(safe_trimws(as.character(value)[1]))) {
+      value <- setting_display_value(input$config_text, key, default = default)
+    }
+    safe_trimws(as.character(value)[1])
+  }
+
+  setting_input_logical <- function(key, default = FALSE) {
+    value <- input[[setting_input_id(key)]]
+    if (is.null(value) || length(value) == 0 || all(is.na(value))) {
+      return(setting_display_logical(input$config_text, key, default = default))
+    }
+    toupper(safe_trimws(as.character(value)[1])) %in% c("TRUE", "1", "YES")
   }
 
   render_builder_control <- function(spec) {
@@ -258,11 +276,7 @@ server <- function(input, output, session) {
       textInput(input_id, spec_label, value = value)
     )
 
-    if (!is.null(spec$help)) {
-      tagList(control, tags$p(class = "small-note", spec$help))
-    } else {
-      control
-    }
+    control
   }
 
   safe_render_builder_control <- function(spec) {
@@ -387,20 +401,9 @@ server <- function(input, output, session) {
       actionButton("save_settings_form", "Save config/settings.R from form", icon = icon("save"))
     )
 
-    section_aliases <- c(
-      "Feature filters" = "RSD and IQR filters"
-    )
-
     resolve_section_name <- function(section_name) {
       if (section_name %in% names(section_blocks)) {
         return(section_name)
-      }
-
-      if (section_name %in% names(section_aliases)) {
-        alias <- section_aliases[[section_name]]
-        if (alias %in% names(section_blocks)) {
-          return(alias)
-        }
       }
 
       section_name
@@ -989,43 +992,40 @@ server <- function(input, output, session) {
   }
 
   build_quick_config <- function(current_text) {
-    cfg <- current_text
+    cfg <- build_settings_builder_config(current_text)
     allowed_groups <- parse_allowed_groups(default_allowed_groups_value())
-    duplicate_strategy_effective <- safe_trimws(as.character(input$duplicate_name_strategy)[1])
+    duplicate_strategy_effective <- setting_input_text("duplicate_name_strategy", default = "collapse_best_qc_rsd")
     if (!nzchar(duplicate_strategy_effective)) {
       duplicate_strategy_effective <- "collapse_best_qc_rsd"
     }
+    run_metrics_effective <- setting_input_text("run_metrics", default = "FDR_and_p_value")
+    statistical_test_effective <- setting_input_text("statistical_test_type", default = "student")
+    test_is_paired_effective <- identical(toupper(setting_input_text("test_is_paired", default = "FALSE")), "TRUE")
+    minimal_output_effective <- setting_input_logical("minimal_output", default = FALSE)
 
     cfg <- replace_or_append(cfg, "output_dir", dQuote(input$output_dir))
     cfg <- replace_or_append(cfg, "use_weight_normalization", if (isTRUE(input$use_weight_normalization)) "TRUE" else "FALSE")
-    normalization_mode_effective <- safe_trimws(input[[setting_input_id("normalization_mode")]])
-    if (!nzchar(normalization_mode_effective)) {
-      normalization_mode_effective <- safe_trimws(input$normalization_mode)
-    }
+    normalization_mode_effective <- setting_input_text("normalization_mode", default = "none")
     if (!normalization_mode_effective %in% c("none", "PQN", "QC_LOESS")) {
       normalization_mode_effective <- "none"
     }
     cfg <- replace_or_append(cfg, "normalization_mode", dQuote(normalization_mode_effective))
-    cfg <- replace_or_append(cfg, "loess_min_qc_points", setting_value_integer(input[[setting_input_id("loess_min_qc_points")]], default = 5))
-    cfg <- replace_or_append(cfg, "QC_LOESS_span", setting_value_numeric(input[[setting_input_id("QC_LOESS_span")]], default = 0.75))
     cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(duplicate_strategy_effective))
-    cfg <- replace_or_append(cfg, "p_value_cutoff", setting_value_numeric(input[[setting_input_id("p_value_cutoff")]], default = 0.05))
-    cfg <- replace_or_append(cfg, "fdr_cutoff", setting_value_numeric(input[[setting_input_id("fdr_cutoff")]], default = 0.05))
-    cfg <- replace_or_append(cfg, "run_metrics", dQuote(input$run_metrics))
-    cfg <- replace_or_append(cfg, "heatmap_rank_metrics", dQuote(input$run_metrics))
-    cfg <- replace_or_append(cfg, "statistical_test_type", dQuote(input$statistical_test_type))
-    cfg <- replace_or_append(cfg, "test_is_paired", if (identical(as.character(input$test_is_paired)[1], "TRUE")) "TRUE" else "FALSE")
+    cfg <- replace_or_append(cfg, "run_metrics", dQuote(run_metrics_effective))
+    cfg <- replace_or_append(cfg, "heatmap_rank_metrics", dQuote(run_metrics_effective))
+    cfg <- replace_or_append(cfg, "statistical_test_type", dQuote(statistical_test_effective))
+    cfg <- replace_or_append(cfg, "test_is_paired", if (isTRUE(test_is_paired_effective)) "TRUE" else "FALSE")
     # Derive p-value correction method from run_metrics selection so that
     # `run_metrics` becomes the primary choice for significance metric.
     # If the user selected any option including "FDR", default correction is "FDR" (BH),
     # otherwise use "raw" (no correction) to match p-value usage.
-    derived_pvalue_correction <- if (grepl("FDR", as.character(input$run_metrics), ignore.case = TRUE)) {
+    derived_pvalue_correction <- if (grepl("FDR", run_metrics_effective, ignore.case = TRUE)) {
       "FDR"
     } else {
       "raw"
     }
     cfg <- replace_or_append(cfg, "pvalue_correction_method", dQuote(derived_pvalue_correction))
-    minimal_flag <- if (isTRUE(input$minimal_output)) "TRUE" else "FALSE"
+    minimal_flag <- if (isTRUE(minimal_output_effective)) "TRUE" else "FALSE"
     cfg <- replace_or_append(cfg, "minimal_output", minimal_flag)
     cfg <- replace_or_append(cfg, "use_reference_file", if (isTRUE(input$use_reference_file)) "TRUE" else "FALSE")
     cfg <- replace_or_append(cfg, "reference_col_metabolite", dQuote(safe_trimws(input$reference_col_metabolite)))
@@ -1044,7 +1044,7 @@ server <- function(input, output, session) {
     # Derive alpha_sig based on run_metrics selection
     # When both metrics are selected, use FDR (more conservative)
     # Otherwise use the cutoff corresponding to the selected metric
-    derived_alpha_sig <- if (grepl("FDR", as.character(input$run_metrics), ignore.case = TRUE)) {
+    derived_alpha_sig <- if (grepl("FDR", run_metrics_effective, ignore.case = TRUE)) {
       "fdr_cutoff"
     } else {
       "p_value_cutoff"
@@ -1090,7 +1090,7 @@ server <- function(input, output, session) {
     out
   }
 
-  build_expected_output_manifest <- function(minimal_mode = isTRUE(input$minimal_output)) {
+  build_expected_output_manifest <- function(minimal_mode = setting_input_logical("minimal_output", default = FALSE)) {
     out_dir <- normalized_output_dir()
     cfg <- input$config_text
     strategy <- extract_config_value(cfg, "duplicate_name_strategy")
@@ -1689,9 +1689,9 @@ server <- function(input, output, session) {
       cfg <- input$config_text
 
       minimal_from_cfg <- config_flag_value(cfg, "minimal_output", default = FALSE)
-      if (!identical(isTRUE(input$minimal_output), isTRUE(minimal_from_cfg))) {
+      if (!identical(setting_input_logical("minimal_output", default = FALSE), isTRUE(minimal_from_cfg))) {
         minimal_output_guard$updating <- TRUE
-        updateCheckboxInput(session, "minimal_output", value = minimal_from_cfg)
+        updateSelectInput(session, setting_input_id("minimal_output"), selected = if (isTRUE(minimal_from_cfg)) "TRUE" else "FALSE")
       } else {
         minimal_output_guard$updating <- FALSE
       }
@@ -1750,14 +1750,14 @@ server <- function(input, output, session) {
     ignoreInit = TRUE
   )
 
-  observeEvent(input$minimal_output,
+  observeEvent(input[[setting_input_id("minimal_output")]],
     {
       if (isTRUE(minimal_output_guard$updating)) {
         minimal_output_guard$updating <- FALSE
         return()
       }
 
-      if (isTRUE(input$minimal_output)) {
+      if (setting_input_logical("minimal_output", default = FALSE)) {
         manifest_min <- build_expected_output_manifest(minimal_mode = TRUE)
         manifest_full <- build_expected_output_manifest(minimal_mode = FALSE)
         skipped_files <- setdiff(manifest_full$core_files, manifest_min$core_files)
@@ -1766,7 +1766,7 @@ server <- function(input, output, session) {
           title = "Confirm minimal output",
           size = "l",
           easyClose = TRUE,
-          tags$p("Minimal output keeps your plots and statistics options. It only skips selected intermediate global exports."),
+          tags$p("Minimal output keeps selected plots and statistics. It only skips selected intermediate global exports used for audit/debug review."),
           tags$p(tags$strong("Output directory:"), paste0(" ", manifest_min$out_dir)),
           tags$h5("Files generated in minimal mode"),
           render_manifest_list(manifest_min$core_files),
@@ -1804,7 +1804,7 @@ server <- function(input, output, session) {
     {
       removeModal()
       minimal_output_guard$updating <- TRUE
-      updateCheckboxInput(session, "minimal_output", value = FALSE)
+      updateSelectInput(session, setting_input_id("minimal_output"), selected = "FALSE")
       set_minimal_output_status(FALSE)
     },
     ignoreInit = TRUE
@@ -1834,7 +1834,7 @@ server <- function(input, output, session) {
       use_reference_file_last_state(current_use_reference_file)
 
       if (isTRUE(input$use_reference_file)) {
-        updateSelectInput(session, "duplicate_name_strategy", selected = "reference_or_best_qc_rsd")
+        updateSelectInput(session, setting_input_id("duplicate_name_strategy"), selected = "reference_or_best_qc_rsd")
         cfg <- input$config_text
         cfg <- replace_or_append(cfg, "use_reference_file", "TRUE")
         cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote("reference_or_best_qc_rsd"))
@@ -1846,7 +1846,7 @@ server <- function(input, output, session) {
 
       if (!isTRUE(input$use_reference_file)) {
         updateCheckboxInput(session, "manual_reference_cols", value = FALSE)
-        updateSelectInput(session, "duplicate_name_strategy", selected = "collapse_best_qc_rsd")
+        updateSelectInput(session, setting_input_id("duplicate_name_strategy"), selected = "collapse_best_qc_rsd")
         cfg <- input$config_text
         cfg <- replace_or_append(cfg, "use_reference_file", "FALSE")
         cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote("collapse_best_qc_rsd"))
@@ -1860,10 +1860,10 @@ server <- function(input, output, session) {
     ignoreInit = TRUE
   )
 
-  observeEvent(input$duplicate_name_strategy,
+  observeEvent(input[[setting_input_id("duplicate_name_strategy")]],
     {
       cfg <- input$config_text
-      cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(safe_trimws(as.character(input$duplicate_name_strategy)[1])))
+      cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(setting_input_text("duplicate_name_strategy", default = "collapse_best_qc_rsd")))
       updateTextAreaInput(session, "config_text", value = cfg)
     },
     ignoreInit = TRUE
@@ -2148,7 +2148,7 @@ server <- function(input, output, session) {
         tags$p("You are about to start the pipeline with the current settings."),
         tags$ul(
           tags$li(paste("Output directory:", safe_trimws(input$output_dir))),
-          tags$li(paste("Minimal output:", if (isTRUE(input$minimal_output)) "Enabled" else "Disabled")),
+          tags$li(paste("Minimal output:", if (setting_input_logical("minimal_output", default = FALSE)) "Enabled" else "Disabled")),
           tags$li(paste("Use reference file:", if (isTRUE(input$use_reference_file)) "Enabled" else "Disabled"))
         ),
         checkboxInput("skip_run_confirm", "Do not ask again in this session", value = FALSE),
