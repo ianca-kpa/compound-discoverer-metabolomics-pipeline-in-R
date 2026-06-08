@@ -250,10 +250,14 @@ body {
 
 .settings-subtab-grid {
 	display: grid;
-	grid-template-columns: repeat(1, minmax(260px, 1fr));
+	grid-template-columns: repeat(12, minmax(0, 1fr));
 	gap: 12px;
 	padding-top: 12px;
 	min-width: 0;
+}
+
+.settings-subtab-grid > .settings-section-card {
+	grid-column: span 12;
 }
 
 .settings-section-card {
@@ -293,6 +297,23 @@ body {
 	flex: 0 0 auto;
 }
 
+.settings-layout-controls {
+	display: flex;
+	align-items: end;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.settings-layout-controls .shiny-input-container {
+	margin-bottom: 0;
+}
+
+.settings-layout-controls label {
+	font-size: 11px;
+	margin-bottom: 2px;
+	color: var(--muted);
+}
+
 .settings-action-copy {
 	display: grid;
 	gap: 2px;
@@ -312,7 +333,7 @@ body {
 
 .settings-fields-grid {
 	display: grid;
-	grid-template-columns: repeat(3, minmax(160px, 1fr));
+	grid-template-columns: repeat(var(--settings-fields-per-card, 3), minmax(160px, 1fr));
 	gap: 10px;
 	width: 100%;
 	align-items: start;
@@ -807,9 +828,29 @@ pre {
 		grid-template-columns: 1fr;
 	}
 
+	.settings-subtab-grid > .settings-section-card {
+		grid-column: 1 / -1 !important;
+	}
+
 	.settings-save-bar {
 		align-items: stretch;
 		flex-direction: column;
+	}
+
+	.settings-action-bar,
+	.settings-layout-controls {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.settings-layout-controls {
+		width: 100%;
+		margin-left: 0;
+	}
+
+	.settings-layout-controls .shiny-input-container,
+	.settings-layout-controls input {
+		width: 100% !important;
 	}
 
 	.settings-header-row > h4 {

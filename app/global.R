@@ -200,6 +200,7 @@ validate_metadata_columns <- function(path,
 
   allowed_groups <- unique(trimws(as.character(allowed_groups)))
   allowed_groups <- allowed_groups[nzchar(allowed_groups)]
+  model_group_values <- character(0)
 
   if (length(allowed_groups) < 2 && !is.null(model_allowed_groups_by_model) && length(model_allowed_groups_by_model) > 0) {
     inferred_groups <- unique(trimws(unlist(strsplit(as.character(model_allowed_groups_by_model), ",", fixed = TRUE), use.names = FALSE)))
@@ -209,7 +210,16 @@ validate_metadata_columns <- function(path,
     }
   }
 
-  allowed_groups_norm <- toupper(allowed_groups)
+  if (!is.null(model_allowed_groups_by_model) && length(model_allowed_groups_by_model) > 0) {
+    model_group_values <- unique(trimws(unlist(
+      strsplit(as.character(model_allowed_groups_by_model), ",", fixed = TRUE),
+      use.names = FALSE
+    )))
+    model_group_values <- model_group_values[nzchar(model_group_values)]
+  }
+
+  valid_group_values <- unique(c(allowed_groups, model_group_values))
+  allowed_groups_norm <- toupper(valid_group_values)
   if (length(allowed_groups) < 2) {
     return(list(
       ok = FALSE,
@@ -257,7 +267,7 @@ validate_metadata_columns <- function(path,
           "Invalid values in metadata group column ('",
           group_col,
           "'). Allowed values: ",
-          paste(allowed_groups, collapse = ", "),
+          paste(valid_group_values, collapse = ", "),
           ". Found: ",
           paste(invalid_groups, collapse = ", "),
           ". Please review your metadata file and fix the group column."
@@ -302,7 +312,12 @@ settings_form_sections <- list(
     fields = list(
       list(key = "p_value_cutoff", label = "P-value cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
       list(key = "fdr_cutoff", label = "FDR cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
-      list(key = "fc_cutoff_log2", label = "FC cutoff (log2)", type = "numeric", default = 0, step = 0.1, min = 0),
+      list(key = "fc_cutoff_log2", label = "FC cutoff (log2)", type = "numeric", default = 0, step = 0.1, min = 0)
+    )
+  ),
+  list(
+    title = "PCA",
+    fields = list(
       list(key = "pca_scaling", label = "PCA scaling", type = "select", choices = c("none", "pareto", "autoscale"), default = "pareto"),
       list(key = "ellipse_positive", label = "Enable group ellipses", type = "logical_select", default = TRUE)
     )
@@ -321,6 +336,43 @@ settings_form_sections <- list(
       list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = FALSE),
       list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("none", "greek_latin_ascii", "ascii_translit"), default = "none")
     )
+  )
+)
+
+settings_builder_layout <- list(
+  run_setup = list(
+    label = "Run setup",
+    sections = c(
+      "Statistics thresholds",
+      "Normalization",
+      "Feature filters"
+    ),
+    widths = c(6, 6, 12)
+  ),
+  visual_outputs = list(
+    label = "Visual outputs",
+    sections = c(
+      "Heatmap",
+      "PCA"
+    ),
+    widths = c(6, 6)
+  ),
+  exports = list(
+    label = "Exports",
+    sections = c("Output controls"),
+    widths = c(12),
+    narrow = FALSE
+  ),
+  field_columns = c(
+    default = 2,
+    "Output controls" = 3,
+    "PCA" = 2,
+    "Normalization" = 2,
+    "Feature filters" = 3,
+    "RSD and IQR filters" = 3,
+    "Feature filtering and naming" = 2,
+    "Statistics thresholds" = 3,
+    "Heatmap" = 3
   )
 )
 

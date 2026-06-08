@@ -294,11 +294,34 @@ server <- function(input, output, session) {
   #
   # @param sections List of section objects with title and fields
   # @return Named list of tags$div blocks, keyed by section title
+  settings_layout_field_columns <- function(section_title) {
+    layout <- get0("settings_builder_layout", ifnotfound = list(), inherits = TRUE)
+    field_columns <- layout$field_columns
+
+    value <- if (!is.null(field_columns) && section_title %in% names(field_columns)) {
+      field_columns[[section_title]]
+    } else if (!is.null(field_columns) && "default" %in% names(field_columns)) {
+      field_columns[["default"]]
+    } else {
+      2
+    }
+
+    value <- suppressWarnings(as.integer(value))
+    if (is.na(value)) {
+      value <- 2
+    }
+
+    max(1, min(4, value))
+  }
+
   build_section_blocks_ui <- function(sections) {
     blocks <- lapply(sections, function(section) {
       section_fields <- lapply(section$fields, safe_render_builder_control)
+      field_columns <- settings_layout_field_columns(section$title)
+
       tags$div(
         class = "settings-section-card",
+        style = paste0("--settings-fields-per-card:", field_columns, ";"),
         tags$h5(section$title),
         tags$div(
           class = "settings-fields-grid",
@@ -364,50 +387,101 @@ server <- function(input, output, session) {
       actionButton("save_settings_form", "Save config/settings.R from form", icon = icon("save"))
     )
 
+    section_aliases <- c(
+      "Feature filters" = "RSD and IQR filters"
+    )
+
+    resolve_section_name <- function(section_name) {
+      if (section_name %in% names(section_blocks)) {
+        return(section_name)
+      }
+
+      if (section_name %in% names(section_aliases)) {
+        alias <- section_aliases[[section_name]]
+        if (alias %in% names(section_blocks)) {
+          return(alias)
+        }
+      }
+
+      section_name
+    }
+
+    card_width_style <- function(width) {
+      width <- suppressWarnings(as.integer(width))
+      if (is.na(width)) {
+        width <- 12
+      }
+
+      width <- max(1, min(12, width))
+      paste0("grid-column: span ", width, ";")
+    }
+
     make_section_card <- function(section_name) {
-      if (!section_name %in% names(section_blocks)) {
+      resolved_name <- resolve_section_name(section_name)
+      if (!resolved_name %in% names(section_blocks)) {
         return(NULL)
       }
 
-      section_blocks[[section_name]]
+      section_blocks[[resolved_name]]
+    }
+
+    make_layout_card <- function(section_name, width) {
+      card <- make_section_card(section_name)
+      if (is.null(card)) {
+        return(NULL)
+      }
+
+      existing_style <- safe_trimws(card$attribs$style)
+      card$attribs$style <- paste(
+        c(existing_style[nzchar(existing_style)], card_width_style(width)),
+        collapse = " "
+      )
+
+      card
+    }
+
+    layout <- get0("settings_builder_layout", ifnotfound = list(), inherits = TRUE)
+    tab_keys <- setdiff(names(layout), "field_columns")
+    tab_panels <- lapply(tab_keys, function(tab_key) {
+      tab_spec <- layout[[tab_key]]
+      sections <- as.character(tab_spec$sections)
+      widths <- tab_spec$widths
+
+      if (is.null(widths) || length(widths) == 0) {
+        widths <- rep(12, length(sections))
+      }
+      if (length(widths) < length(sections)) {
+        widths <- rep(widths, length.out = length(sections))
+      }
+
+      cards <- Map(make_layout_card, sections, widths[seq_along(sections)])
+      cards <- Filter(Negate(is.null), cards)
+
+      if (length(cards) == 0) {
+        return(NULL)
+      }
+
+      tabPanel(
+        if (!is.null(tab_spec$label) && nzchar(as.character(tab_spec$label)[1])) as.character(tab_spec$label)[1] else tab_key,
+        tags$div(class = "settings-subtab-grid", do.call(tagList, cards))
+      )
+    })
+    tab_panels <- Filter(Negate(is.null), tab_panels)
+
+    if (length(tab_panels) == 0) {
+      tab_panels <- list(
+        tabPanel(
+          "Settings",
+          tags$div(class = "settings-subtab-grid", do.call(tagList, section_blocks))
+        )
+      )
     }
 
     bslib::page_fillable(
       tags$div(
         class = "settings-builder-shell",
         save_bar,
-        tabsetPanel(
-          id = "settings_form_subtabs",
-          tabPanel(
-            "Normalization / QC",
-            tags$div(
-              class = "settings-subtab-grid",
-              make_section_card("Normalization"),
-              make_section_card("RSD and IQR filters")
-            )
-          ),
-          tabPanel(
-            "Statistics",
-            tags$div(
-              class = "settings-subtab-grid",
-              make_section_card("Statistics thresholds")
-            )
-          ),
-          tabPanel(
-            "Heatmap",
-            tags$div(
-              class = "settings-subtab-grid",
-              make_section_card("Heatmap")
-            )
-          ),
-          tabPanel(
-            "Filtering / Names",
-            tags$div(
-              class = "settings-subtab-grid",
-              make_section_card("Feature filtering and naming")
-            )
-          )
-        )
+        do.call(tabsetPanel, c(list(id = "settings_form_subtabs"), tab_panels))
       )
     )
   })
@@ -740,8 +814,16 @@ server <- function(input, output, session) {
       return(setNames(character(0), character(0)))
     }
 
+    detected_groups_by_model <- get_detected_metadata_groups_by_model()
+
     alias_values <- vapply(models, function(model_name) {
-      safe_trimws(input[[metadata_model_groups_input_id(model_name)]])
+      value <- safe_trimws(input[[metadata_model_groups_input_id(model_name)]])
+
+      if (!nzchar(value) && model_name %in% names(detected_groups_by_model)) {
+        value <- format_group_suggestion(detected_groups_by_model[[model_name]])
+      }
+
+      value
     }, character(1), USE.NAMES = FALSE)
 
     names(alias_values) <- models

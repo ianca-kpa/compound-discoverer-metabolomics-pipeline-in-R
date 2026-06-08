@@ -229,7 +229,7 @@ normalize_model_group_pairs <- function(groups_vec, model_vec, pair_map, control
       next
     }
 
-    model_idx <- !is.na(model_vec) & trimws(model_vec) == trimws(model_name)
+    model_idx <- !is.na(model_vec) & toupper(trimws(model_vec)) == toupper(trimws(model_name))
     if (!any(model_idx)) {
       next
     }
