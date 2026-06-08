@@ -66,21 +66,15 @@ ui <- fluidPage(
         ),
         checkboxInput(
           "manual_metadata_cols",
-          "Manually map metadata columns and configure groups",
+          "Manually map metadata columns",
           value = FALSE
         ),
-        # textInput(
-        #   "allowed_metadata_groups",
-        #   "Allowed metadata groups (control first, test second)",
-        #   value = "WT, TG"
-        # ),
-        uiOutput("allowed_metadata_groups_hint"),
+        uiOutput("metadata_model_alias_ui"),
         tags$hr(),
         conditionalPanel(
           condition = "input.manual_metadata_cols == true",
           tags$div(
             class = "metadata-mapping-panel",
-            uiOutput("metadata_model_alias_ui"),
             checkboxInput(
               "show_metadata_column_fields",
               "Show metadata column fields",
@@ -111,35 +105,7 @@ ui <- fluidPage(
           ),
           value = setting_display_logical(initial_settings_text, "use_weight_normalization", default = FALSE)
         ),
-        selectInput(
-          "normalization_mode",
-          "Main normalization",
-          choices = c("None" = "none", "PQN" = "PQN", "QC-LOESS" = "QC_LOESS"),
-          selected = {
-            mode_value <- setting_display_value(initial_settings_text, "normalization_mode", default = "PQN")
-            mode_value <- toupper(as.character(mode_value))
-            if (mode_value == "LOESS") mode_value <- "QC_LOESS"
-            if (mode_value == "NONE") "none" else if (mode_value %in% c("PQN", "QC_LOESS")) mode_value else "PQN"
-          }
-        ),
-        conditionalPanel(
-          condition = "input.normalization_mode == 'QC_LOESS'",
-          numericInput(
-            "loess_min_qc_points",
-            "Minimum QC points per feature",
-            value = setting_display_numeric(initial_settings_text, "loess_min_qc_points", default = 5),
-            min = 5,
-            step = 1
-          ),
-          numericInput(
-            "QC_LOESS_span",
-            "QC-LOESS span",
-            value = setting_display_numeric(initial_settings_text, "QC_LOESS_span", default = 0.75),
-            min = 0.05,
-            max = 1,
-            step = 0.05
-          )
-        ),
+
         checkboxInput(
           "use_reference_file",
           "Use reference file for duplicate matching",
@@ -262,8 +228,8 @@ ui <- fluidPage(
         class = "content-card",
         uiOutput("top_status_banner"),
         fluidRow(
-          column(6, actionButton("stop_pipeline", "Stop pipeline")),
-          column(6, actionButton("run_pipeline", "Run pipeline"))
+          column(6, actionButton("stop_pipeline", "Stop pipeline", icon = icon("stop"))),
+          column(6, actionButton("run_pipeline", "Run pipeline", icon = icon("play")))
         ),
         tags$hr(),
         tabsetPanel(
@@ -284,13 +250,7 @@ ui <- fluidPage(
                 tags$div(
                   style = "display:none;",
                   class = "save_settings_form",
-                  textAreaInput(
-                    "config_text",
-                    "settings.R content",
-                    value = initial_settings_text,
-                    rows = 35,
-                    width = "auto"
-                  )
+                  textAreaInput("config_text", "settings.R content", value = initial_settings_text, rows = 35, width = "auto")
                 )
               ),
               tabPanel(
@@ -310,12 +270,31 @@ ui <- fluidPage(
             )
           ),
           tabPanel(
-            "Gallery Results",
+            "Results Gallery",
             tags$div(
               style = "display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;",
               h4(style = "margin:0;", "Results Gallery"),
-              actionButton("open_output_dir_gallery", "Open output folder")
+              tags$div(
+                style = "display:flex; align-items:center; gap:8px;",
+                actionButton(
+                  "refresh_results_gallery",
+                  "Refresh",
+                  icon = icon("refresh"),
+                  style = "background-color: #007bff; color: white;"
+                ),
+                actionButton("open_output_dir_gallery", "Open output folder", icon = icon("folder-open"))
+              )
             ),
+            uiOutput("results_gallery_summary"),
+            tags$hr(),
+            h4("QC/PCA comparison"),
+            tags$p(
+              class = "small-note",
+              "RSD, drift residual, technical/biological PCA, and retained feature counts from the latest run."
+            ),
+            tableOutput("qc_pca_comparison_summary"),
+            tags$hr(),
+            h4("Figures"),
             uiOutput("results_gallery")
           )
           ,

@@ -26,6 +26,8 @@ run_untargeted_pipeline <- function() {
     step_info("output_dir: ", output_dir)
     step_info("use_only_known: ", use_only_known)
     step_info("duplicate_name_strategy: ", duplicate_name_strategy)
+    step_info("rsd_filter_metric: ", get0("rsd_filter_metric", ifnotfound = "none", inherits = TRUE))
+    step_info("rsd_thresholds: ", paste(get0("rsd_thresholds", ifnotfound = c(20), inherits = TRUE), collapse = ", "))
     step_info("active_variant: ", active_variant)
     step_info("normalization_mode: ", get0("normalization_mode", ifnotfound = "PQN", inherits = TRUE))
     # -------------------------------------------------------------------------
@@ -320,30 +322,61 @@ run_untargeted_pipeline <- function() {
       out_csv = summary_csv
     )
 
+    rsd_filter_metric <- tolower(as.character(rsd_filter_metric))
     qc_rsd_all <- calc_qc_rsd(assay_work, qc_idx)
+    sample_rsd_all <- apply(assay_work[sample_idx, , drop = FALSE], 2, calc_rsd)
 
     df_qc_rsd_pre <- tibble(
       featureID = names(qc_rsd_all),
       qc_rsd = as.numeric(qc_rsd_all)
     ) %>% arrange(qc_rsd)
 
+    df_sample_rsd_pre <- tibble(
+      featureID = names(sample_rsd_all),
+      rsd = as.numeric(sample_rsd_all)
+    ) %>% arrange(rsd)
 
     out_qc_rsd_pre <- file.path(paths$global$audits, "qc_rsd_values_pre_variants.csv")
     write_csv_safe(df_qc_rsd_pre, out_qc_rsd_pre)
     log_written_object(log_path, out_qc_rsd_pre, df_qc_rsd_pre, note = "QC RSD values (pre-variants)")
 
+    out_sample_rsd_pre <- file.path(paths$global$audits, "rsd_values_pre_variants.csv")
+    write_csv_safe(df_sample_rsd_pre, out_sample_rsd_pre)
+    log_written_object(log_path, out_sample_rsd_pre, df_sample_rsd_pre, note = "Sample RSD values (pre-variants)")
+
     variants <- list()
     variants$BASE <- list(mat = assay_work, feature = feature_tbl_work)
 
-    for (thr in rsd_thresholds) {
-      keep <- names(qc_rsd_all)[!is.na(qc_rsd_all) & qc_rsd_all <= thr]
-      variants[[paste0("QC_RSD", thr)]] <- list(
-        mat = assay_work[, keep, drop = FALSE],
-        feature = feature_tbl_work %>% filter(featureID %in% keep)
-      )
+    if (identical(rsd_filter_metric, "qc_rsd")) {
+      for (thr in rsd_thresholds) {
+        keep <- names(qc_rsd_all)[!is.na(qc_rsd_all) & qc_rsd_all <= thr]
+        variants[[paste0("QC_RSD", thr)]] <- list(
+          mat = assay_work[, keep, drop = FALSE],
+          feature = feature_tbl_work %>% filter(featureID %in% keep)
+        )
+      }
+    } else if (identical(rsd_filter_metric, "rsd")) {
+      for (thr in rsd_thresholds) {
+        keep <- names(sample_rsd_all)[!is.na(sample_rsd_all) & sample_rsd_all <= thr]
+        variants[[paste0("RSD", thr)]] <- list(
+          mat = assay_work[, keep, drop = FALSE],
+          feature = feature_tbl_work %>% filter(featureID %in% keep)
+        )
+      }
     }
 
-    step_info("Variants created based on RSD thresholds: ", paste(names(variants), collapse = ", "))
+    if (identical(rsd_filter_metric, "none")) {
+      active_variant <- "BASE"
+      step_info("RSD filtering disabled. Active variant forced to BASE.")
+    } else if (identical(rsd_filter_metric, "rsd") && grepl("^QC_RSD", active_variant)) {
+      active_variant <- sub("^QC_", "", active_variant)
+      step_info("Converted active_variant to match rsd_filter_metric='rsd': ", active_variant)
+    } else if (identical(rsd_filter_metric, "qc_rsd") && grepl("^RSD", active_variant) && !grepl("^QC_RSD", active_variant)) {
+      active_variant <- paste0("QC_", active_variant)
+      step_info("Converted active_variant to match rsd_filter_metric='qc_rsd': ", active_variant)
+    }
+
+    step_info("Variants created based on ", rsd_filter_metric, " thresholds: ", paste(names(variants), collapse = ", "))
 
     if (!active_variant %in% names(variants)) {
       stop(

@@ -2,7 +2,30 @@
 
 # Compute project/pipeline paths early so we can ensure packages are
 # installed before attempting to load libraries used by the app.
-project_root <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+locate_project_root <- function(start_path = getwd()) {
+  current_path <- normalizePath(start_path, winslash = "/", mustWork = FALSE)
+
+  repeat {
+    has_pipeline <- dir.exists(file.path(current_path, "pipeline", "R"))
+    has_app <- dir.exists(file.path(current_path, "app"))
+    has_app_entry <- file.exists(file.path(current_path, "app.R"))
+
+    if (has_pipeline && has_app && has_app_entry) {
+      return(normalizePath(current_path, winslash = "/", mustWork = TRUE))
+    }
+
+    parent_path <- normalizePath(file.path(current_path, ".."), winslash = "/", mustWork = FALSE)
+    if (identical(parent_path, current_path)) {
+      stop(
+        "Could not locate the project root. Open the repository root or make sure app.R, app/, and pipeline/R/ exist."
+      )
+    }
+
+    current_path <- parent_path
+  }
+}
+
+project_root <- locate_project_root(getwd())
 pipeline_root <- file.path(project_root, "pipeline")
 r_dir <- file.path(pipeline_root, "R")
 config_dir <- file.path(pipeline_root, "config")
@@ -126,7 +149,7 @@ is_absolute_path <- function(path) {
 
 validate_metadata_columns <- function(path,
                                       metadata_mapping = NULL,
-                                      allowed_groups = c("TG", "WT"),
+                                      allowed_groups = c("WT", "TG"),
                                       model_allowed_groups_by_model = NULL) {
   alias_map <- list(
     sample = c("sample", "sample_id", "sample_name", "id_sample", "id", "name"),
@@ -259,9 +282,19 @@ settings_form_sections <- list(
   list(
     title = "Normalization",
     fields = list(
-      list(key = "normalization_mode", label = "Main normalization", type = "select", choices = c("none", "PQN", "QC_LOESS"), default = "PQN"),
+      list(key = "normalization_mode", label = "Main normalization", type = "select", choices = c("none", "PQN", "QC_LOESS"), default = "none"),
       list(key = "loess_min_qc_points", label = "LOESS minimum QC points", type = "integer", default = 5, step = 1, min = 5),
       list(key = "QC_LOESS_span", label = "QC-LOESS span", type = "numeric", default = 0.75, step = 0.05, min = 0.05, max = 1)
+    )
+  ),
+  list(
+    title = "RSD and IQR filters",
+    fields = list(
+      list(key = "rsd_filter_metric", label = "RSD filter metric", type = "select", choices = c("none", "qc_rsd", "rsd"), default = "none"),
+      list(key = "rsd_thresholds", label = "RSD thresholds", type = "vector_numeric", default = c(20), placeholder = "Example: 10, 15, 20, 30"),
+      list(key = "active_variant", label = "Active variant", type = "selectize_text", default = "BASE", choices = c("BASE", "QC_RSD10", "QC_RSD15", "QC_RSD20", "QC_RSD30", "RSD10", "RSD15", "RSD20", "RSD30")),
+      list(key = "low_variance_filter_method", label = "Low-variance filter", type = "select", choices = c("none", "iqr"), default = "none"),
+      list(key = "low_variance_filter_fraction", label = "IQR removal fraction", type = "numeric", default = 0.20, step = 0.05, min = 0, max = 1)
     )
   ),
   list(
@@ -279,23 +312,14 @@ settings_form_sections <- list(
     fields = list(
       list(key = "heatmap_cluster_distance", label = "Heatmap cluster distance", type = "select", choices = c("euclidean", "manhattan"), default = "euclidean"),
       list(key = "heatmap_cluster_method", label = "Heatmap cluster method", type = "select", choices = c("ward.D2", "complete", "average"), default = "ward.D2"),
-      list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1),
-      list(key = "make_heatmap_by_model", label = "Heatmap by model", type = "logical_select", default = TRUE),
-      list(key = "make_heatmap_by_model_sex", label = "Heatmap by model and sex", type = "logical_select", default = TRUE),
-      list(key = "heatmap_scale_method", label = "Heatmap scale method", type = "select", choices = c("none", "zscore", "pareto"), default = "zscore")
+      list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1)
     )
   ),
-  # list(
-  #   title = "Plot generation",
-  #   fields = list(
-      
-  #   )
-  # ),
   list(
     title = "Feature filtering and naming",
     fields = list(
-      list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = TRUE),
-      list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("greek_latin_ascii", "ascii_translit"), default = "greek_latin_ascii")
+      list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = FALSE),
+      list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("none", "greek_latin_ascii", "ascii_translit"), default = "none")
     )
   )
 )
@@ -304,26 +328,31 @@ settings_glossary_map <- c(
   use_reference_file = "Enables reference-table matching for duplicate handling.",
   output_dir = "Defines where all run outputs are written.",
   use_weight_normalization = "Applies sample-weight normalization before downstream analysis.",
-  normalization_mode = "Selects the main normalization after optional weight normalization: none, PQN, or QC-LOESS.",
-  loess_min_qc_points = "Minimum valid QC points required per feature before QC-LOESS correction is applied.",
-  QC_LOESS_span = "Smoothing span used by LOESS for QC drift correction.",
+  normalization_mode = "Main normalization after optional weight normalization: none keeps the post-weight matrix, PQN applies QC-reference PQN, and QC_LOESS corrects signal drift using QC samples.",
+  loess_min_qc_points = "Minimum number of valid QC values required for a feature to receive QC-LOESS drift correction.",
+  QC_LOESS_span = "LOESS smoothing span for QC-LOESS; smaller values follow local drift more closely, larger values smooth more strongly.",
+  rsd_filter_metric = "Controls RSD-based feature filtering: none keeps BASE, qc_rsd filters using QC sample RSD, and rsd filters using biological/sample RSD.",
+  rsd_thresholds = "Numeric RSD cutoffs used to create variants such as QC_RSD20 or RSD20.",
+  active_variant = "Selects which RSD-filtered variant is used downstream. BASE disables RSD filtering.",
+  low_variance_filter_method = "Low-variance feature filtering method. none disables it; iqr removes the lowest-IQR fraction.",
+  low_variance_filter_fraction = "Fraction of lowest-IQR features removed when low_variance_filter_method is iqr.",
   duplicate_name_strategy = "Sets how duplicate features are merged or kept.",
   run_metrics = "Selects the significance metric used in run-level decisions and rankings.",
-  p_value_cutoff = "Threshold used for p-value based stats and volcano significance.",
-  fdr_cutoff = "Threshold used for FDR / adjusted p-value based stats and volcano significance.",
-  fc_cutoff_log2 = "Minimum absolute log2 fold-change required where fold-change filtering is enabled; use 0 to disable.",
-  use_only_known = "If TRUE, only features with known identities are included in the analysis.",
-  pca_scaling = "Scaling mode applied before PCA: none, pareto, or autoscale.",
-  heatmap_top_n = "Maximum number of ranked features shown in top heatmaps.",
+  p_value_cutoff = "Raw p-value threshold used for significance decisions, volcano highlighting, and p-value ranked outputs.",
+  fdr_cutoff = "Adjusted p-value threshold used for FDR significance decisions, volcano highlighting, and FDR ranked outputs.",
+  fc_cutoff_log2 = "Minimum absolute log2 fold-change required when fold-change filtering is enabled; use 0 to disable the fold-change requirement.",
+  use_only_known = "If TRUE, removes features without a known/canonical name before downstream statistics and plots.",
+  pca_scaling = "Scaling applied before PCA: none leaves variables unchanged, pareto divides by sqrt(SD), and autoscale divides by SD.",
+  heatmap_top_n = "Maximum number of top-ranked features shown in each top heatmap.",
   dup_mz_digits = "Rounding precision for m/z during duplicate detection.",
   dup_rt_digits = "Rounding precision for RT during duplicate detection.",
-  sanitize_mode = "Chooses the text normalization strategy for feature names and labels.",
+  sanitize_mode = "Text handling for exported feature names: none preserves characters, greek_latin_ascii transliterates Greek/Latin to ASCII, and ascii_translit uses general ASCII transliteration.",
   make_heatmap_by_model = "TRUE generates top-ranked heatmaps per model.",
   make_heatmap_by_model_sex = "TRUE also generates top-ranked heatmaps split by sex.",
   heatmap_scale_method = "Scaling applied to heatmap matrices: none, zscore, or pareto.",
-  heatmap_cluster_distance = "Recommended distance metric for heatmap clustering: euclidean or manhattan.",
-  heatmap_cluster_method = "Recommended hierarchical clustering method: ward.D2, complete, or average.",
-  ellipse_positive = "If TRUE, group ellipses are drawn only when 'positive' condition is met; otherwise sex points are black and shapes indicate sex."
+  heatmap_cluster_distance = "Distance metric used for heatmap clustering: euclidean or manhattan.",
+  heatmap_cluster_method = "Hierarchical clustering linkage used for heatmaps: ward.D2, complete, or average.",
+  ellipse_positive = "Controls PCA ellipse rendering behavior; when TRUE, group ellipses are drawn only for eligible comparisons."
 )
 
 read_initial_config <- function() {

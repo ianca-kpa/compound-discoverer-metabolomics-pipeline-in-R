@@ -36,7 +36,7 @@ stop_on_invalid_weight <- TRUE                 # options: TRUE/FALSE
 invalid_weight_to_NA <- TRUE                   # options: TRUE/FALSE
 
 # Main normalization after optional weight normalization
-normalization_mode <- "PQN"                    # options: "none", "PQN", or "QC_LOESS"
+normalization_mode <- "none"                    # options: "none", "PQN", or "QC_LOESS"
 loess_min_qc_points <- 5                       # minimum valid QC points per feature for QC-LOESS
 QC_LOESS_span <- 0.75                          # LOESS smoothing span for QC-LOESS
 
@@ -46,8 +46,9 @@ presence_filter_min_fraction <- 0.00           # options: 0..1
 impute_half_min <- TRUE                        # options: TRUE/FALSE
 
 # QC RSD thresholds (variant creation)
+rsd_filter_metric <- "none"                    # options: "none", "qc_rsd", "rsd"
 rsd_thresholds <- c(20)                        # options: c(10,15,20,30,...) etc.
-active_variant <- "QC_RSD20"                   # options: "BASE" or one of paste0("QC_RSD", rsd_thresholds)
+active_variant <- "BASE"                       # options: "BASE", paste0("QC_RSD", rsd_thresholds), or paste0("RSD", rsd_thresholds)
 
 # Low-variance filter
 low_variance_filter_method <- "none"           # options: "none" or "iqr"
@@ -95,7 +96,7 @@ make_heatmap_by_model <- TRUE                  # options: TRUE/FALSE
 make_heatmap_by_model_sex <- TRUE              # options: TRUE/FALSE
 heatmap_top_n <- 80
 
-heatmap_scale_method <- "zscore"               # options: "none","zscore","pareto"
+heatmap_scale_method <- "pareto"               # options: "none","zscore","pareto"
 heatmap_order_samples_by_group <- TRUE         # options: TRUE/FALSE (if TRUE, samples will be ordered by group in the heatmaps; if FALSE, original order from the input data will be kept)
 heatmap_cluster_distance <- "euclidean"        # options: "euclidean", "manhattan"
 heatmap_cluster_method <- "ward.D2"            # options: "ward.D2", "complete", "average"
@@ -172,7 +173,7 @@ volcano_gradual_legend_limits <- c(0, 5)         # options: numeric vector of le
 
 # Text sanitation
 sanitize_names_for_exports <- TRUE               # options: TRUE/FALSE
-sanitize_mode <- "greek_latin_ascii"             # options: "greek_latin_ascii" or "ascii_translit"
+sanitize_mode <- "greek_latin_ascii"             # options: "none", "greek_latin_ascii" or "ascii_translit"
 
 # Output control
 minimal_output <- FALSE                          # options: TRUE/FALSE. If TRUE, only exports a minimal set of results (mostly tables, no plots).

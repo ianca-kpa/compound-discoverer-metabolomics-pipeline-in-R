@@ -175,7 +175,7 @@ strip_v_suffix_end <- function(x) {
   stringr::str_replace(x, "_v\\d+$", "")
 }
 
-sanitize_text_for_exports <- function(x, mode = c("greek_latin_ascii","ascii_translit")) {
+sanitize_text_for_exports <- function(x, mode = c("none", "greek_latin_ascii","ascii_translit")) {
   mode <- match.arg(mode)
   
   x <- as.character(x)
@@ -184,7 +184,9 @@ sanitize_text_for_exports <- function(x, mode = c("greek_latin_ascii","ascii_tra
   
   if (all(is.na(x))) return(x)
   
-  if (mode == "greek_latin_ascii") {
+  if (mode == "none") {
+    x <- x
+  } else if (mode == "greek_latin_ascii") {
     x <- stringi::stri_trans_general(x, "Greek-Latin; Latin-ASCII")
   } else {
     x <- iconv(x, from = "", to = "ASCII//TRANSLIT", sub = "")

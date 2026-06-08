@@ -218,7 +218,7 @@ body {
 
 .settings-cards-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(240px, 1fr));
+	grid-template-columns: repeat(1, minmax(240px, 1fr));
 	gap: 10px;
 	align-items: start;
 	width: 100%;
@@ -227,7 +227,7 @@ body {
 
 .settings-columns-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
+	grid-template-columns: repeat(1, minmax(0, 1fr));
 	gap: 10px;
 	align-items: start;
 	width: 100%;
@@ -238,6 +238,21 @@ body {
 	display: grid;
 	gap: 10px;
 	align-content: start;
+	min-width: 0;
+}
+
+.settings-builder-shell {
+	display: grid;
+	gap: 12px;
+	width: 100%;
+	min-width: 0;
+}
+
+.settings-subtab-grid {
+	display: grid;
+	grid-template-columns: repeat(1, minmax(260px, 1fr));
+	gap: 12px;
+	padding-top: 12px;
 	min-width: 0;
 }
 
@@ -257,9 +272,47 @@ body {
 	font-size: 15px;
 }
 
+.settings-action-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: #ffffff;
+	padding: 12px;
+	box-shadow: 0 4px 14px rgba(21, 42, 75, 0.05);
+	width: 100%;
+	margin-bottom: 2px;
+	position: sticky;
+	top: 0;
+	z-index: 5;
+}
+
+.settings-action-bar .btn {
+	flex: 0 0 auto;
+}
+
+.settings-action-copy {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.settings-action-copy strong {
+	font-family: 'Space Grotesk', sans-serif;
+	font-size: 15px;
+}
+
+.settings-action-copy span {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.35;
+}
+
 .settings-fields-grid {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(160px, 1fr));
+	grid-template-columns: repeat(3, minmax(160px, 1fr));
 	gap: 10px;
 	width: 100%;
 	align-items: start;
@@ -749,6 +802,7 @@ pre {
 	.grid-3x2,
 	.settings-cards-grid,
 	.settings-columns-grid,
+	.settings-subtab-grid,
 	.settings-fields-grid {
 		grid-template-columns: 1fr;
 	}

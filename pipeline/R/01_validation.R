@@ -13,6 +13,25 @@ validate_settings <- function() {
   # Filters
   # ---------------------------------------------------------------------------
   stopifnot(low_variance_filter_method %in% c("none", "iqr"))
+  if (!exists("rsd_thresholds", inherits = TRUE)) {
+    rsd_thresholds <<- c(20)
+  }
+  if (!exists("active_variant", inherits = TRUE)) {
+    active_variant <<- "BASE"
+  }
+  if (!exists("rsd_filter_metric", inherits = TRUE)) {
+    if (exists("active_variant", inherits = TRUE) && grepl("^RSD", as.character(active_variant), ignore.case = TRUE)) {
+      rsd_filter_metric <<- "rsd"
+    } else if (exists("active_variant", inherits = TRUE) && grepl("^QC_RSD", as.character(active_variant), ignore.case = TRUE)) {
+      rsd_filter_metric <<- "qc_rsd"
+    } else {
+      rsd_filter_metric <<- "none"
+    }
+  }
+  rsd_filter_metric <- tolower(as.character(rsd_filter_metric))
+  stopifnot(rsd_filter_metric %in% c("none", "qc_rsd", "rsd"))
+  stopifnot(is.numeric(rsd_thresholds), length(rsd_thresholds) >= 1)
+  stopifnot(is.character(active_variant), length(active_variant) == 1)
 
   # ---------------------------------------------------------------------------
   # Normalization
@@ -68,7 +87,7 @@ validate_settings <- function() {
   # ---------------------------------------------------------------------------
   # Name sanitation
   # ---------------------------------------------------------------------------
-  stopifnot(sanitize_mode %in% c("greek_latin_ascii", "ascii_translit"))
+  stopifnot(sanitize_mode %in% c("none", "greek_latin_ascii", "ascii_translit"))
 
   # ---------------------------------------------------------------------------
   # Metrics

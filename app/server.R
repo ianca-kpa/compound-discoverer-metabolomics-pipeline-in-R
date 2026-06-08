@@ -21,6 +21,7 @@ server <- function(input, output, session) {
   )
   selected_result_image <- reactiveVal(NULL)
   gallery_state <- reactiveValues(dir = NULL, prefix = NULL)
+  gallery_refresh_tick <- reactiveVal(0)
   session_started_at <- Sys.time()
   inputs_cleared_timestamp <- reactiveVal(NULL)
   use_reference_file_last_state <- reactiveVal(FALSE)
@@ -34,10 +35,9 @@ server <- function(input, output, session) {
     updateSelectInput(session, "run_metrics", selected = "FDR_and_p_value")
     updateSelectInput(session, "statistical_test_type", selected = "student")
     updateSelectInput(session, "test_is_paired", selected = "FALSE")
-    updateTextInput(session, "allowed_metadata_groups", value = "WT, TG")
     updateCheckboxInput(session, "use_reference_file", value = FALSE)
     updateCheckboxInput(session, "use_weight_normalization", value = FALSE)
-    updateSelectInput(session, "normalization_mode", selected = "PQN")
+    updateSelectInput(session, "normalization_mode", selected = "none")
     updateNumericInput(session, "loess_min_qc_points", value = 5)
     updateNumericInput(session, "QC_LOESS_span", value = 0.75)
     updateCheckboxInput(session, "minimal_output", value = FALSE)
@@ -86,8 +86,8 @@ server <- function(input, output, session) {
           selected = if (isTRUE(setting_display_logical(initial_settings_text, "use_weight_normalization", default = FALSE))) "yes" else "no"
         ),
         footer = tagList(
-          modalButton("Cancel"),
-          actionButton("confirm_weight_norm", "Confirm")
+          modalButton("Cancel", icon = icon("xmark")),
+          actionButton("confirm_weight_norm", "Confirm", icon = icon("check"))
         ),
         easyClose = TRUE
       ))
@@ -354,6 +354,16 @@ server <- function(input, output, session) {
 
   output$settings_builder_ui <- renderUI({
     section_blocks <- build_section_blocks_ui(settings_form_sections)
+    save_bar <- tags$div(
+      class = "settings-action-bar",
+      tags$div(
+        class = "settings-action-copy",
+        tags$strong("Settings form"),
+        tags$span("Current values are applied when running the pipeline.")
+      ),
+      actionButton("save_settings_form", "Save config/settings.R from form", icon = icon("save"))
+    )
+
     make_section_card <- function(section_name) {
       if (!section_name %in% names(section_blocks)) {
         return(NULL)
@@ -362,44 +372,42 @@ server <- function(input, output, session) {
       section_blocks[[section_name]]
     }
 
-    left_cards <- Filter(
-      Negate(is.null),
-      list(
-        make_section_card("Statistics thresholds"),
-        make_section_card("Normalization"),
-        make_section_card("Feature filtering and naming")
-      )
-    )
-
-    right_cards <- Filter(
-      Negate(is.null),
-      list(
-        make_section_card("Heatmap"),
-        make_section_card("Heatmap clustering"),
-        tags$div(
-          class = "settings-section-card",
-          tags$h5("Save settings"),
-          tags$p(
-            class = "small-note",
-            "Persist the current form values into config/settings.R."
+    bslib::page_fillable(
+      tags$div(
+        class = "settings-builder-shell",
+        save_bar,
+        tabsetPanel(
+          id = "settings_form_subtabs",
+          tabPanel(
+            "Normalization / QC",
+            tags$div(
+              class = "settings-subtab-grid",
+              make_section_card("Normalization"),
+              make_section_card("RSD and IQR filters")
+            )
           ),
-          actionButton(
-            "save_settings_form",
-            "Save config/settings.R from form"
+          tabPanel(
+            "Statistics",
+            tags$div(
+              class = "settings-subtab-grid",
+              make_section_card("Statistics thresholds")
+            )
+          ),
+          tabPanel(
+            "Heatmap",
+            tags$div(
+              class = "settings-subtab-grid",
+              make_section_card("Heatmap")
+            )
+          ),
+          tabPanel(
+            "Filtering / Names",
+            tags$div(
+              class = "settings-subtab-grid",
+              make_section_card("Feature filtering and naming")
+            )
           )
         )
-      )
-    )
-
-    bslib::page_fillable(
-      # tags$p(
-      #   class = "small-note",
-      #   "Use this form to edit the main pipeline variables."
-      # ),
-      bslib::layout_columns(
-        tags$div(class = "settings-column-stack", do.call(tagList, left_cards)),
-        tags$div(class = "settings-column-stack", do.call(tagList, right_cards)),
-        col_widths = c(6, 6)
       )
     )
   })
@@ -516,6 +524,81 @@ server <- function(input, output, session) {
     unique(vals[nzchar(vals)])
   }
 
+  group_label_key <- function(value) {
+    key <- tolower(safe_trimws(value))
+    key <- gsub("[^a-z0-9]+", "", key)
+    key
+  }
+
+  suggest_control_test_groups <- function(groups) {
+    groups <- unique(trimws(as.character(groups)))
+    groups <- groups[!is.na(groups) & nzchar(groups) & !is_missing_like(groups)]
+
+    if (length(groups) <= 1) {
+      return(groups)
+    }
+
+    keys <- vapply(groups, group_label_key, character(1), USE.NAMES = FALSE)
+    control_keys <- c("wt", "wildtype", "wild", "control", "ctrl", "vehicle", "veh", "sham", "normal", "healthy", "untreated", "baseline")
+    treatment_keys <- c("tg", "transgenic", "treated", "treatment", "case", "disease", "diseased", "ko", "knockout", "mutant", "mut", "test")
+
+    control_idx <- which(keys %in% control_keys)
+    treatment_idx <- which(keys %in% treatment_keys)
+
+    if (length(control_idx) > 0 && length(treatment_idx) > 0) {
+      first_control <- control_idx[1]
+      first_treatment <- treatment_idx[treatment_idx != first_control][1]
+      if (!is.na(first_treatment)) {
+        return(c(groups[first_control], groups[first_treatment]))
+      }
+    }
+
+    if (length(control_idx) > 0) {
+      first_control <- control_idx[1]
+      first_other <- setdiff(seq_along(groups), first_control)[1]
+      return(c(groups[first_control], groups[first_other]))
+    }
+
+    if (length(treatment_idx) > 0) {
+      first_treatment <- treatment_idx[1]
+      first_other <- setdiff(seq_along(groups), first_treatment)[1]
+      return(c(groups[first_other], groups[first_treatment]))
+    }
+
+    groups[seq_len(min(2, length(groups)))]
+  }
+
+  format_group_suggestion <- function(groups) {
+    suggested <- suggest_control_test_groups(groups)
+    if (length(suggested) < 2) {
+      return("")
+    }
+    paste(suggested[1:2], collapse = ", ")
+  }
+
+  default_allowed_groups_value <- function() {
+    model_groups <- metadata_allowed_groups_by_model()
+    if (!is.null(model_groups) && length(model_groups) > 0) {
+      inferred <- format_group_suggestion(
+        unique(trimws(unlist(strsplit(as.character(model_groups), ",", fixed = TRUE), use.names = FALSE)))
+      )
+      if (nzchar(inferred)) {
+        return(inferred)
+      }
+    }
+
+    detected <- format_group_suggestion(get_detected_metadata_groups())
+    if (nzchar(detected)) {
+      return(detected)
+    }
+
+    paste(
+      setting_display_value(initial_settings_text, "comparison_group_control", default = "WT"),
+      setting_display_value(initial_settings_text, "comparison_group_treatment", default = "TG"),
+      sep = ", "
+    )
+  }
+
   allowed_groups_hint_text <- function(value) {
     raw <- safe_trimws(value)
     if (!nzchar(raw)) {
@@ -597,6 +680,27 @@ server <- function(input, output, session) {
     sort(models)
   }
 
+  get_detected_metadata_groups <- function() {
+    md_path <- resolve_input_file("metadata")
+    if (!is_valid_file_path(md_path)) {
+      return(character(0))
+    }
+
+    mapping <- metadata_column_mapping()
+    md <- tryCatch(
+      read_metadata_with_mapping(md_path, mapping),
+      error = function(e) NULL
+    )
+
+    if (is.null(md) || !("group" %in% names(md))) {
+      return(character(0))
+    }
+
+    groups <- trimws(as.character(md$group))
+    groups <- groups[!is.na(groups) & nzchar(groups) & !is_missing_like(groups)]
+    unique(groups)
+  }
+
   get_detected_metadata_groups_by_model <- function() {
     md_path <- resolve_input_file("metadata")
     if (!is_valid_file_path(md_path)) {
@@ -626,7 +730,7 @@ server <- function(input, output, session) {
     split_groups <- split(md$group, md$model)
     lapply(split_groups, function(values) {
       values <- unique(values[!is.na(values) & nzchar(values) & !is_missing_like(values)])
-      sort(values)
+      values
     })
   }
 
@@ -804,7 +908,7 @@ server <- function(input, output, session) {
 
   build_quick_config <- function(current_text) {
     cfg <- current_text
-    allowed_groups <- parse_allowed_groups(input$allowed_metadata_groups)
+    allowed_groups <- parse_allowed_groups(default_allowed_groups_value())
     duplicate_strategy_effective <- safe_trimws(as.character(input$duplicate_name_strategy)[1])
     if (!nzchar(duplicate_strategy_effective)) {
       duplicate_strategy_effective <- "collapse_best_qc_rsd"
@@ -812,13 +916,16 @@ server <- function(input, output, session) {
 
     cfg <- replace_or_append(cfg, "output_dir", dQuote(input$output_dir))
     cfg <- replace_or_append(cfg, "use_weight_normalization", if (isTRUE(input$use_weight_normalization)) "TRUE" else "FALSE")
-    normalization_mode_effective <- safe_trimws(input$normalization_mode)
+    normalization_mode_effective <- safe_trimws(input[[setting_input_id("normalization_mode")]])
+    if (!nzchar(normalization_mode_effective)) {
+      normalization_mode_effective <- safe_trimws(input$normalization_mode)
+    }
     if (!normalization_mode_effective %in% c("none", "PQN", "QC_LOESS")) {
-      normalization_mode_effective <- "PQN"
+      normalization_mode_effective <- "none"
     }
     cfg <- replace_or_append(cfg, "normalization_mode", dQuote(normalization_mode_effective))
-    cfg <- replace_or_append(cfg, "loess_min_qc_points", setting_value_integer(input$loess_min_qc_points, default = 5))
-    cfg <- replace_or_append(cfg, "QC_LOESS_span", setting_value_numeric(input$QC_LOESS_span, default = 0.75))
+    cfg <- replace_or_append(cfg, "loess_min_qc_points", setting_value_integer(input[[setting_input_id("loess_min_qc_points")]], default = 5))
+    cfg <- replace_or_append(cfg, "QC_LOESS_span", setting_value_numeric(input[[setting_input_id("QC_LOESS_span")]], default = 0.75))
     cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(duplicate_strategy_effective))
     cfg <- replace_or_append(cfg, "p_value_cutoff", setting_value_numeric(input[[setting_input_id("p_value_cutoff")]], default = 0.05))
     cfg <- replace_or_append(cfg, "fdr_cutoff", setting_value_numeric(input[[setting_input_id("fdr_cutoff")]], default = 0.05))
@@ -1127,9 +1234,12 @@ server <- function(input, output, session) {
 
   clear_all_inputs <- function() {
     clearing_inputs(TRUE)
-    on.exit({
-      clearing_inputs(FALSE)
-    }, add = TRUE)
+    on.exit(
+      {
+        clearing_inputs(FALSE)
+      },
+      add = TRUE
+    )
     reset_common_inputs()
     updateTextInput(session, "external_data_path", value = "")
     updateTextInput(session, "external_metadata_path", value = "")
@@ -1315,11 +1425,121 @@ server <- function(input, output, session) {
       return(character(0))
     }
 
-    info <- file.info(files)
-    keep <- !is.na(info$mtime) & info$mtime >= session_started_at
-    files <- files[keep]
-
     files[order(tolower(basename(files)))]
+  }
+
+  read_result_csv <- function(path) {
+    if (!file.exists(path)) {
+      return(NULL)
+    }
+
+    tryCatch(
+      utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE),
+      error = function(e) NULL
+    )
+  }
+
+  format_summary_number <- function(value, digits = 2) {
+    if (is.null(value) || length(value) == 0 || all(is.na(value))) {
+      return("NA")
+    }
+
+    format(round(as.numeric(value)[1], digits), trim = TRUE, scientific = FALSE)
+  }
+
+  current_normalization_label <- function() {
+    raw_mode <- safe_trimws(input[[setting_input_id("normalization_mode")]])
+
+    if (!nzchar(raw_mode)) {
+      raw_mode <- safe_trimws(input$normalization_mode)
+    }
+
+    if (!nzchar(raw_mode)) {
+      raw_mode <- setting_display_value(input$config_text, "normalization_mode", default = "none")
+    }
+
+    mode <- toupper(safe_trimws(raw_mode))
+    if (mode %in% c("LOESS", "QC LOESS", "QC-LOESS")) {
+      return("QC_LOESS")
+    }
+    if (mode %in% c("PQN", "NONE")) {
+      return(mode)
+    }
+
+    raw_mode
+  }
+
+  normalization_summary_items <- function(out_dir) {
+    mode <- current_normalization_label()
+    weight_enabled <- if (!is.null(input$use_weight_normalization)) {
+      isTRUE(input$use_weight_normalization)
+    } else {
+      isTRUE(setting_display_logical(input$config_text, "use_weight_normalization", default = FALSE))
+    }
+
+    items <- list(
+      tags$li(paste("Output directory:", out_dir)),
+      tags$li(paste("Weight normalization:", if (weight_enabled) "enabled" else "disabled")),
+      tags$li(paste("Main normalization:", mode))
+    )
+
+    exports_dir <- file.path(out_dir, "global", "exports_global")
+
+    if (identical(mode, "PQN")) {
+      pqn <- read_result_csv(file.path(exports_dir, "06_pqn_factors_weight_then_PQN.csv"))
+
+      if (!is.null(pqn) && nrow(pqn) > 0) {
+        factor_col <- intersect(c("pqn_factor_used_for_norm", "pqn_factor"), names(pqn))
+        valid_col <- intersect(c("valid_pqn", "valid"), names(pqn))
+        valid_n <- if (length(valid_col) > 0) {
+          sum(toupper(as.character(pqn[[valid_col[1]]])) %in% c("TRUE", "1", "YES"), na.rm = TRUE)
+        } else {
+          nrow(pqn)
+        }
+        median_factor <- if (length(factor_col) > 0) {
+          stats::median(as.numeric(pqn[[factor_col[1]]]), na.rm = TRUE)
+        } else {
+          NA_real_
+        }
+
+        items <- c(items, list(
+          tags$li(paste("PQN samples audited:", nrow(pqn))),
+          tags$li(paste("Valid PQN factors:", valid_n)),
+          tags$li(paste("Median PQN factor:", format_summary_number(median_factor)))
+        ))
+      } else {
+        items <- c(items, list(tags$li("PQN audit file not found for the latest output.")))
+      }
+    } else if (identical(mode, "QC_LOESS")) {
+      loess_audit <- read_result_csv(file.path(exports_dir, "06_loess_qc_correction_audit_weight_then_LOESS.csv"))
+
+      if (!is.null(loess_audit) && nrow(loess_audit) > 0) {
+        corrected_col <- intersect(c("corrected", "loess_corrected"), names(loess_audit))
+        qc_points_col <- intersect(c("qc_points_used", "n_qc_points"), names(loess_audit))
+        corrected_n <- if (length(corrected_col) > 0) {
+          sum(toupper(as.character(loess_audit[[corrected_col[1]]])) %in% c("TRUE", "1", "YES"), na.rm = TRUE)
+        } else {
+          NA_integer_
+        }
+        median_qc_points <- if (length(qc_points_col) > 0) {
+          stats::median(as.numeric(loess_audit[[qc_points_col[1]]]), na.rm = TRUE)
+        } else {
+          NA_real_
+        }
+
+        items <- c(items, list(
+          tags$li(paste("QC-LOESS features audited:", nrow(loess_audit))),
+          tags$li(paste("Features corrected:", ifelse(is.na(corrected_n), "NA", corrected_n))),
+          tags$li(paste("Median QC points per feature:", format_summary_number(median_qc_points, digits = 0)))
+        ))
+      } else {
+        items <- c(items, list(tags$li("QC-LOESS audit file not found for the latest output.")))
+      }
+    } else if (identical(mode, "NONE")) {
+      items <- c(items, list(tags$li("No main normalization was applied after optional weight normalization.")))
+    }
+
+    items
   }
 
   ensure_results_resource_path <- function(out_dir) {
@@ -1558,11 +1778,14 @@ server <- function(input, output, session) {
     ignoreInit = TRUE
   )
 
-  observeEvent(input$duplicate_name_strategy, {
-    cfg <- input$config_text
-    cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(safe_trimws(as.character(input$duplicate_name_strategy)[1])))
-    updateTextAreaInput(session, "config_text", value = cfg)
-  }, ignoreInit = TRUE)
+  observeEvent(input$duplicate_name_strategy,
+    {
+      cfg <- input$config_text
+      cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(safe_trimws(as.character(input$duplicate_name_strategy)[1])))
+      updateTextAreaInput(session, "config_text", value = cfg)
+    },
+    ignoreInit = TRUE
+  )
 
   observeEvent(input$manual_reference_cols,
     {
@@ -1634,7 +1857,10 @@ server <- function(input, output, session) {
         textInput(
           metadata_model_groups_input_id(model_name),
           label = "Allowed metadata groups (control first, test second)",
-          value = safe_trimws(input$allowed_metadata_groups)
+          value = {
+            model_suggestion <- format_group_suggestion(detected_groups)
+            if (nzchar(model_suggestion)) model_suggestion else default_allowed_groups_value()
+          }
         )
       )
     })
@@ -1673,6 +1899,15 @@ server <- function(input, output, session) {
     save_config_and_inputs(current_config_text())
     status_message("Saved config/settings.R and copied uploaded files to data/.")
   })
+
+  observeEvent(input$refresh_results_gallery,
+    {
+      gallery_refresh_tick(gallery_refresh_tick() + 1)
+      selected_result_image(NULL)
+      status_message("Results gallery refreshed.")
+    },
+    ignoreInit = TRUE
+  )
 
   observeEvent(input$open_output_dir_gallery,
     {
@@ -1788,9 +2023,9 @@ server <- function(input, output, session) {
       missing_inputs <- c(missing_inputs, "Reference")
     }
 
-    if (allowed_groups_missing_comma(input$allowed_metadata_groups)) {
+    if (allowed_groups_missing_comma(default_allowed_groups_value())) {
       status_message(
-        "Metadata validation failed: please separate the control and test group names with a comma (for example, WT, TG)."
+        "Metadata validation failed: please review the per-model group order. Use a comma between control and test groups."
       )
       return()
     }
@@ -1808,7 +2043,7 @@ server <- function(input, output, session) {
       validate_metadata_columns(
         metadata_path_for_validation,
         metadata_mapping = metadata_column_mapping(),
-        allowed_groups = parse_allowed_groups(input$allowed_metadata_groups),
+        allowed_groups = parse_allowed_groups(default_allowed_groups_value()),
         model_allowed_groups_by_model = metadata_allowed_groups_by_model()
       ),
       error = function(e) list(ok = FALSE, message = conditionMessage(e))
@@ -1930,7 +2165,7 @@ server <- function(input, output, session) {
         tags$p("This action cannot be undone. Proceed?"),
         footer = tagList(
           actionButton("cancel_clear", "Cancel"),
-          actionButton("confirm_clear", "Clear everything", class = "btn-warning")
+          actionButton("confirm_clear", "Clear everything", class = "btn-warning", icon = icon("trash"))
         )
       ))
     },
@@ -2061,21 +2296,8 @@ server <- function(input, output, session) {
       ),
       tags$div(
         style = "flex-shrink:0;",
-        actionButton("clear_all", "Clear all", class = "btn-secondary", style = "padding:6px 12px; font-size:12px; background:#242424; border-color:#242424; color:#fff;")
+        actionButton("clear_all", "Clear all", class = "btn-secondary", style = "padding:6px 12px; font-size:12px; background:#242424; border-color:#242424; color:#fff;", icon = icon("trash"))
       )
-    )
-  })
-
-  output$allowed_metadata_groups_hint <- renderUI({
-    hint <- allowed_groups_hint_text(input$allowed_metadata_groups)
-    if (!nzchar(hint)) {
-      return(NULL)
-    }
-
-    tags$p(
-      class = "small-note",
-      style = "margin-top:6px; color:#b45309;",
-      hint
     )
   })
 
@@ -2139,7 +2361,7 @@ server <- function(input, output, session) {
       "data",
       allow_config_fallback = FALSE
     )
-    allowed_groups <- unique(parse_allowed_groups(input$allowed_metadata_groups))
+    allowed_groups <- unique(parse_allowed_groups(default_allowed_groups_value()))
     allowed_groups_norm <- toupper(allowed_groups)
     metadata_mapping <- metadata_column_mapping()
 
@@ -2346,7 +2568,184 @@ server <- function(input, output, session) {
     )
   })
 
+  output$results_gallery_summary <- renderUI({
+    gallery_refresh_tick()
+    invalidateLater(2000, session)
+
+    out_dir <- resolve_output_dir_abs()
+
+    if (!dir.exists(out_dir)) {
+      return(tags$p("Output directory not found yet. Run the pipeline first."))
+    }
+
+    tags$div(
+      class = "settings-section-card",
+      tags$h5("Latest normalization summary"),
+      tags$ul(class = "small-note", do.call(tagList, normalization_summary_items(out_dir)))
+    )
+  })
+
+  output$qc_pca_comparison_summary <- renderTable(
+    {
+      gallery_refresh_tick()
+      invalidateLater(2000, session)
+
+      out_dir <- resolve_output_dir_abs()
+
+      if (!dir.exists(out_dir)) {
+        return(data.frame(
+          Metric = "Output",
+          Value = "Output directory not found yet",
+          Source = out_dir,
+          stringsAsFactors = FALSE
+        ))
+      }
+
+      rows <- list()
+      add_row <- function(metric, value, source) {
+        rows[[length(rows) + 1]] <<- data.frame(
+          Metric = metric,
+          Value = as.character(value),
+          Source = source,
+          stringsAsFactors = FALSE
+        )
+      }
+
+      audits_dir <- file.path(out_dir, "global", "audits_global")
+      exports_dir <- file.path(out_dir, "global", "exports_global")
+
+      filter_summary_path <- file.path(audits_dir, "filter_summary.csv")
+      filter_summary <- read_result_csv(filter_summary_path)
+      if (!is.null(filter_summary) && nrow(filter_summary) > 0) {
+        before_col <- intersect(c("n_features_before", "features_before"), names(filter_summary))
+        after_col <- intersect(c("n_features_after", "features_after"), names(filter_summary))
+
+        if (length(before_col) > 0) {
+          add_row(
+            "Initial feature count",
+            format_summary_number(filter_summary[[before_col[1]]][1], digits = 0),
+            rel_path_from_output(filter_summary_path, out_dir)
+          )
+        }
+
+        if (length(after_col) > 0) {
+          final_features <- tail(filter_summary[[after_col[1]]], 1)
+          add_row(
+            "Retained feature count",
+            format_summary_number(final_features, digits = 0),
+            rel_path_from_output(filter_summary_path, out_dir)
+          )
+        }
+      } else {
+        add_row("Retained feature count", "Not available", "filter_summary.csv not found")
+      }
+
+      qc_rsd_path <- file.path(audits_dir, "qc_rsd_values_pre_variants.csv")
+      qc_rsd <- read_result_csv(qc_rsd_path)
+      if (!is.null(qc_rsd) && nrow(qc_rsd) > 0) {
+        rsd_col <- intersect(c("qc_rsd", "QC_RSD", "rsd", "RSD"), names(qc_rsd))
+        if (length(rsd_col) > 0) {
+          rsd_values <- as.numeric(qc_rsd[[rsd_col[1]]])
+          add_row(
+            "Median QC RSD",
+            format_summary_number(stats::median(rsd_values, na.rm = TRUE)),
+            rel_path_from_output(qc_rsd_path, out_dir)
+          )
+          add_row(
+            "QC RSD <= 30%",
+            paste0(sum(rsd_values <= 30, na.rm = TRUE), " / ", sum(!is.na(rsd_values))),
+            rel_path_from_output(qc_rsd_path, out_dir)
+          )
+        } else {
+          add_row("Median QC RSD", "RSD column not found", rel_path_from_output(qc_rsd_path, out_dir))
+        }
+      } else {
+        add_row("Median QC RSD", "Not available", "qc_rsd_values_pre_variants.csv not found")
+      }
+
+      sample_rsd_path <- file.path(audits_dir, "rsd_values_pre_variants.csv")
+      sample_rsd <- read_result_csv(sample_rsd_path)
+      if (!is.null(sample_rsd) && nrow(sample_rsd) > 0) {
+        sample_rsd_col <- intersect(c("rsd", "RSD"), names(sample_rsd))
+        if (length(sample_rsd_col) > 0) {
+          sample_rsd_values <- as.numeric(sample_rsd[[sample_rsd_col[1]]])
+          add_row(
+            "Median sample RSD",
+            format_summary_number(stats::median(sample_rsd_values, na.rm = TRUE)),
+            rel_path_from_output(sample_rsd_path, out_dir)
+          )
+          add_row(
+            "Sample RSD <= 30%",
+            paste0(sum(sample_rsd_values <= 30, na.rm = TRUE), " / ", sum(!is.na(sample_rsd_values))),
+            rel_path_from_output(sample_rsd_path, out_dir)
+          )
+        } else {
+          add_row("Median sample RSD", "RSD column not found", rel_path_from_output(sample_rsd_path, out_dir))
+        }
+      } else {
+        add_row("Median sample RSD", "Not available", "rsd_values_pre_variants.csv not found")
+      }
+
+      iqr_audit_path <- file.path(audits_dir, "low_variance_iqr_audit_ACTIVE.csv")
+      iqr_audit <- read_result_csv(iqr_audit_path)
+      if (!is.null(iqr_audit) && nrow(iqr_audit) > 0 && "kept" %in% names(iqr_audit)) {
+        kept_values <- toupper(as.character(iqr_audit$kept)) %in% c("TRUE", "1", "YES")
+        add_row(
+          "IQR low-variance filter",
+          paste0(sum(!kept_values, na.rm = TRUE), " removed / ", nrow(iqr_audit), " audited"),
+          rel_path_from_output(iqr_audit_path, out_dir)
+        )
+      } else {
+        add_row("IQR low-variance filter", "Not available or disabled", "low_variance_iqr_audit_ACTIVE.csv")
+      }
+
+      loess_path <- file.path(exports_dir, "06_loess_qc_correction_audit_weight_then_LOESS.csv")
+      loess_audit <- read_result_csv(loess_path)
+      if (!is.null(loess_audit) && nrow(loess_audit) > 0) {
+        corrected_col <- intersect(c("corrected", "loess_corrected"), names(loess_audit))
+        corrected_n <- if (length(corrected_col) > 0) {
+          sum(toupper(as.character(loess_audit[[corrected_col[1]]])) %in% c("TRUE", "1", "YES"), na.rm = TRUE)
+        } else {
+          NA_integer_
+        }
+
+        add_row(
+          "Drift correction / residual audit",
+          paste0(ifelse(is.na(corrected_n), "NA", corrected_n), " corrected / ", nrow(loess_audit), " audited"),
+          rel_path_from_output(loess_path, out_dir)
+        )
+      } else {
+        add_row("Drift correction / residual audit", "Not available", "QC-LOESS audit file not found")
+      }
+
+      pca_files <- list.files(
+        out_dir,
+        pattern = "^PCA_.*\\.(png|jpg|jpeg)$",
+        recursive = TRUE,
+        full.names = TRUE,
+        ignore.case = TRUE
+      )
+      add_row("PCA figures", length(pca_files), "plots/pca")
+      add_row(
+        "Biological PCA figures",
+        sum(grepl("group|model", basename(pca_files), ignore.case = TRUE)),
+        "PCA filenames containing group/model"
+      )
+      add_row(
+        "Technical PCA figures",
+        sum(grepl("sex|technical|qc", basename(pca_files), ignore.case = TRUE)),
+        "PCA filenames containing sex/technical/QC"
+      )
+
+      do.call(rbind, rows)
+    },
+    striped = TRUE,
+    bordered = TRUE,
+    spacing = "s"
+  )
+
   output$results_gallery <- renderUI({
+    gallery_refresh_tick()
     invalidateLater(2000, session)
 
     out_dir <- resolve_output_dir_abs()
@@ -2485,10 +2884,10 @@ server <- function(input, output, session) {
         ext <- tolower(tools::file_ext(img_path))
 
         if (format == "png" && ext == "png") {
-          file.copy(img_path, file, overwrite = TRUE)
+          file.copy(img_path, file, overwrite = TRUE, dpi = 300)
           return()
         } else if (format == "jpeg" && ext %in% c("jpg", "jpeg")) {
-          file.copy(img_path, file, overwrite = TRUE)
+          file.copy(img_path, file, overwrite = TRUE, dpi = 300)
           return()
         }
 
