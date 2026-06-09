@@ -22,6 +22,7 @@ server <- function(input, output, session) {
   selected_result_image <- reactiveVal(NULL)
   gallery_state <- reactiveValues(dir = NULL, prefix = NULL)
   gallery_refresh_tick <- reactiveVal(0)
+  results_cleared <- reactiveVal(FALSE)
   session_started_at <- Sys.time()
   inputs_cleared_timestamp <- reactiveVal(NULL)
   use_reference_file_last_state <- reactiveVal(FALSE)
@@ -53,6 +54,7 @@ server <- function(input, output, session) {
     reset_reference_columns()
     selected_result_image(NULL)
     pipeline_log_text("No run executed yet.")
+    gallery_refresh_tick(gallery_refresh_tick() + 1)
     inputs_cleared_timestamp(Sys.time())
   }
 
@@ -1332,6 +1334,9 @@ server <- function(input, output, session) {
   }
 
   launch_pipeline <- function() {
+    results_cleared(FALSE)
+    gallery_refresh_tick(gallery_refresh_tick() + 1)
+
     rscript_cmd <- file.path(R.home("bin"), "Rscript")
     if (.Platform$OS.type == "windows") {
       rscript_cmd <- paste0(rscript_cmd, ".exe")
@@ -1439,6 +1444,7 @@ server <- function(input, output, session) {
       add = TRUE
     )
     reset_common_inputs()
+    results_cleared(TRUE)
     reset_settings_form_inputs()
     updateTextInput(session, "external_data_path", value = "")
     updateTextInput(session, "external_metadata_path", value = "")
@@ -1454,6 +1460,7 @@ server <- function(input, output, session) {
     updateTextAreaInput(session, "config_text", value = cfg)
     gallery_state$dir <- NULL
     gallery_state$prefix <- NULL
+    gallery_refresh_tick(gallery_refresh_tick() + 1)
     process_state$log_file <- NULL
     process_state$pipeline_log_file <- NULL
     process_state$proc <- NULL
@@ -1606,6 +1613,10 @@ server <- function(input, output, session) {
   }
 
   get_result_image_files <- function() {
+    if (isTRUE(results_cleared())) {
+      return(character(0))
+    }
+
     out_dir <- resolve_output_dir_abs()
 
     if (!dir.exists(out_dir)) {
@@ -2123,6 +2134,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$refresh_results_gallery,
     {
+      results_cleared(FALSE)
       gallery_refresh_tick(gallery_refresh_tick() + 1)
       selected_result_image(NULL)
       status_message("Results gallery refreshed.")
@@ -2793,6 +2805,10 @@ server <- function(input, output, session) {
     gallery_refresh_tick()
     invalidateLater(2000, session)
 
+    if (isTRUE(results_cleared())) {
+      return(tags$p("Results were cleared. Run the pipeline or refresh the gallery to load existing outputs."))
+    }
+
     out_dir <- resolve_output_dir_abs()
 
     if (!dir.exists(out_dir)) {
@@ -2810,6 +2826,15 @@ server <- function(input, output, session) {
     {
       gallery_refresh_tick()
       invalidateLater(2000, session)
+
+      if (isTRUE(results_cleared())) {
+        return(data.frame(
+          Metric = "Results",
+          Value = "Cleared",
+          Source = "Run the pipeline or refresh the gallery to load existing outputs",
+          stringsAsFactors = FALSE
+        ))
+      }
 
       out_dir <- resolve_output_dir_abs()
 
