@@ -23,6 +23,7 @@ run_untargeted_pipeline <- function() {
     step_info("metadata_path: ", metadata_path)
     step_info("metadata_sheet: ", metadata_sheet)
     step_info("reference_path: ", if (exists("reference_path", inherits = TRUE) && !is.null(reference_path) && nzchar(as.character(reference_path))) reference_path else "not provided")
+    step_info("injection_order_path: ", if (exists("injection_order_path", inherits = TRUE) && !is.null(injection_order_path) && nzchar(as.character(injection_order_path))) injection_order_path else "not provided")
     step_info("output_dir: ", output_dir)
     step_info("use_only_known: ", use_only_known)
     step_info("duplicate_name_strategy: ", duplicate_name_strategy)
@@ -184,11 +185,19 @@ run_untargeted_pipeline <- function() {
     } else if (normalization_mode_local == "QC_LOESS") {
       loess_min_qc_points_local <- get0("loess_min_qc_points", ifnotfound = 5, inherits = TRUE)
       loess_span_local <- get0("QC_LOESS_span", ifnotfound = get0("loess_span", ifnotfound = 0.75, inherits = TRUE), inherits = TRUE)
+      injection_order_local <- NULL
+      injection_order_path_local <- trimws(as.character(get0("injection_order_path", ifnotfound = "", inherits = TRUE))[1])
+
+      if (nzchar(injection_order_path_local)) {
+        injection_order_local <- read_injection_order_file(injection_order_path_local, metadata_aligned)
+        step_info("QC-LOESS injection order loaded from: ", injection_order_path_local)
+      }
 
       normalization_bundle <- normalize_qc_loess(
         assay_num_weight,
         metadata_aligned,
         qc_idx,
+        injection_order = injection_order_local,
         min_qc_points = loess_min_qc_points_local,
         loess_span = loess_span_local
       )
@@ -323,6 +332,10 @@ run_untargeted_pipeline <- function() {
     )
 
     rsd_filter_metric <- tolower(as.character(rsd_filter_metric))
+    active_variant <- as.character(active_variant)
+    if (tolower(active_variant) %in% c("none", "base")) {
+      active_variant <- "BASE"
+    }
     qc_rsd_all <- calc_qc_rsd(assay_work, qc_idx)
     sample_rsd_all <- apply(assay_work[sample_idx, , drop = FALSE], 2, calc_rsd)
 
@@ -367,7 +380,7 @@ run_untargeted_pipeline <- function() {
 
     if (identical(rsd_filter_metric, "none")) {
       active_variant <- "BASE"
-      step_info("RSD filtering disabled. Active variant forced to BASE.")
+      step_info("RSD filtering disabled. Active variant set to none.")
     } else if (identical(rsd_filter_metric, "rsd") && grepl("^QC_RSD", active_variant)) {
       active_variant <- sub("^QC_", "", active_variant)
       step_info("Converted active_variant to match rsd_filter_metric='rsd': ", active_variant)

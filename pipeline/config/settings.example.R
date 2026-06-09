@@ -41,6 +41,7 @@ invalid_weight_to_NA <- TRUE                   # options: TRUE/FALSE
 normalization_mode <- "none"                    # options: "none", "PQN", or "QC_LOESS" ("LOESS" is accepted as a legacy alias for "QC_LOESS")
 loess_min_qc_points <- 5                       # minimum valid QC points per feature for QC-LOESS
 QC_LOESS_span <- 0.75                          # LOESS smoothing span for QC-LOESS
+injection_order_path <- ""                     # optional separate sample/run-order table for QC-LOESS
 
 # Filters
 missing_exclusion_max_fraction <- 0.50         # options: 0..1 (set >=1 to disable)
@@ -50,10 +51,10 @@ impute_half_min <- TRUE                        # options: TRUE/FALSE
 # RSD thresholds (variant creation)
 # "qc_rsd" creates variants such as QC_RSD20 from QC sample RSD.
 # "rsd" creates variants such as RSD20 from biological/sample RSD.
-# "none" uses BASE and skips RSD-based variant filtering.
+# "none" skips RSD-based variant filtering.
 rsd_filter_metric <- "none"                    # options: "none", "qc_rsd", "rsd"
 rsd_thresholds <- c(20)                        # options: c(10,15,20,30,...) etc.
-active_variant <- "BASE"                       # options: "BASE", paste0("QC_RSD", rsd_thresholds), or paste0("RSD", rsd_thresholds)
+active_variant <- "none"                       # options: "none", paste0("QC_RSD", rsd_thresholds), or paste0("RSD", rsd_thresholds)
 
 # Low-variance filter
 low_variance_filter_method <- "none"           # options: "none" or "iqr"

@@ -29,7 +29,14 @@ server <- function(input, output, session) {
   reset_common_inputs <- function() {
     shinyjs::reset("data_file")
     shinyjs::reset("metadata_file")
+    shinyjs::reset("injection_order_file")
     shinyjs::reset("reference_file")
+    updateSelectInput(
+      session,
+      "existing_injection_order_path",
+      choices = c("None" = "", available_injection_order_files()),
+      selected = ""
+    )
     updateTextInput(session, "output_dir", value = "output")
     updateSelectInput(session, setting_input_id("duplicate_name_strategy"), selected = "collapse_best_qc_rsd")
     updateSelectInput(session, setting_input_id("run_metrics"), selected = "FDR_and_p_value")
@@ -57,6 +64,7 @@ server <- function(input, output, session) {
       "# No default settings file found in config/."
     }
     reset_common_inputs()
+    reset_settings_form_inputs()
     status_message("Ready.")
     shinyjs::runjs("setTimeout(function() { Shiny.setInputValue('init_complete', true); }, 50);")
   })
@@ -127,6 +135,79 @@ server <- function(input, output, session) {
     toupper(safe_trimws(as.character(value)[1])) %in% c("TRUE", "1", "YES")
   }
 
+  derive_active_variant <- function(metric, thresholds, default_threshold = 20) {
+    metric <- tolower(safe_trimws(as.character(metric)[1]))
+    if (!metric %in% c("none", "qc_rsd", "rsd")) {
+      metric <- "none"
+    }
+    if (identical(metric, "none")) {
+      return("none")
+    }
+
+    threshold_values <- suppressWarnings(as.numeric(as.character(thresholds)))
+    threshold_values <- threshold_values[!is.na(threshold_values)]
+    if (length(threshold_values) == 0) {
+      threshold_values <- default_threshold
+    }
+
+    threshold_label <- format(threshold_values[1], scientific = FALSE, trim = TRUE)
+    if (identical(metric, "qc_rsd")) {
+      return(paste0("QC_RSD", threshold_label))
+    }
+
+    paste0("RSD", threshold_label)
+  }
+
+  reset_settings_form_inputs <- function() {
+    for (section in settings_form_sections) {
+      for (spec in section$fields) {
+        input_id <- setting_input_id(spec$key)
+        spec_type <- if (!is.null(spec$type) && length(spec$type) > 0) as.character(spec$type)[1] else "text"
+        spec_default <- spec$default
+        spec_choices <- if (!is.null(spec$choices) && length(spec$choices) > 0) as.character(spec$choices) else character(0)
+
+        switch(spec_type,
+          checkbox = updateCheckboxInput(session, input_id, value = isTRUE(spec_default)),
+          logical_select = updateSelectInput(session, input_id, selected = if (isTRUE(spec_default)) "TRUE" else "FALSE"),
+          numeric = updateNumericInput(session, input_id, value = spec_default),
+          integer = updateNumericInput(session, input_id, value = spec_default),
+          select = updateSelectInput(session, input_id, choices = spec_choices, selected = as.character(spec_default)[1]),
+          multiselect = updateSelectizeInput(session, input_id, choices = spec_choices, selected = as.character(spec_default), server = FALSE),
+          vector_numeric = updateSelectizeInput(
+            session,
+            input_id,
+            choices = unique(c(as.character(spec_default), spec_choices)),
+            selected = as.character(spec_default),
+            server = FALSE
+          ),
+          vector_text = updateSelectizeInput(
+            session,
+            input_id,
+            choices = unique(c(as.character(spec_default), spec_choices)),
+            selected = as.character(spec_default),
+            server = FALSE
+          ),
+          nullable_vector_text = updateSelectizeInput(
+            session,
+            input_id,
+            choices = unique(c(as.character(spec_default), spec_choices)),
+            selected = as.character(spec_default),
+            server = FALSE
+          ),
+          selectize_text = updateSelectizeInput(
+            session,
+            input_id,
+            choices = unique(c(as.character(spec_default), spec_choices)),
+            selected = as.character(spec_default)[1],
+            server = FALSE
+          ),
+          sheet = updateTextInput(session, input_id, value = as.character(spec_default)[1]),
+          updateTextInput(session, input_id, value = as.character(spec_default)[1])
+        )
+      }
+    }
+  }
+
   render_builder_control <- function(spec) {
     spec_key <- if (!is.null(spec$key) && length(spec$key) > 0 && nzchar(as.character(spec$key)[1])) {
       as.character(spec$key)[1]
@@ -150,7 +231,7 @@ server <- function(input, output, session) {
     }
 
     input_id <- setting_input_id(spec_key)
-    default_text <- initial_settings_text
+    default_text <- ""
 
     to_scalar <- function(x, fallback = "") {
       if (is.null(x) || length(x) == 0 || all(is.na(x))) {
@@ -170,7 +251,6 @@ server <- function(input, output, session) {
       nullable_vector_text = setting_default_vector(setting_display_value(default_text, spec_key, default = spec$default)),
       setting_display_value(default_text, spec_key, default = spec$default)
     )
-
     vector_choices <- unique(c(as.character(value), as.character(spec$default), spec_choices))
     vector_choices <- vector_choices[nzchar(vector_choices)]
 
@@ -270,7 +350,12 @@ server <- function(input, output, session) {
           value_chr <- trimws(to_scalar(value, fallback = ""))
           if (!nzchar(value_chr)) as.character(spec$default) else value_chr
         },
-        options = list(create = TRUE, persist = TRUE)
+        options = list(
+          create = TRUE,
+          createOnBlur = TRUE,
+          persist = TRUE,
+          placeholder = if (!is.null(spec$placeholder)) as.character(spec$placeholder)[1] else "Type a value or choose one"
+        )
       ),
       sheet = textInput(input_id, spec_label, value = value),
       textInput(input_id, spec_label, value = value)
@@ -381,10 +466,14 @@ server <- function(input, output, session) {
           sheet = setting_value_sheet(input_value),
           setting_value_text(input_value)
         )
-
         cfg <- replace_or_append(cfg, spec$key, replacement)
       }
     }
+
+    cfg <- replace_or_append(cfg, "active_variant", setting_value_text(derive_active_variant(
+      input[[setting_input_id("rsd_filter_metric")]],
+      input[[setting_input_id("rsd_thresholds")]]
+    )))
 
     cfg
   }
@@ -736,7 +825,7 @@ server <- function(input, output, session) {
   }
 
   get_detected_metadata_models <- function() {
-    md_path <- resolve_input_file("metadata")
+    md_path <- resolve_input_file("metadata", allow_config_fallback = FALSE)
     if (!is_valid_file_path(md_path)) {
       return(character(0))
     }
@@ -758,7 +847,7 @@ server <- function(input, output, session) {
   }
 
   get_detected_metadata_groups <- function() {
-    md_path <- resolve_input_file("metadata")
+    md_path <- resolve_input_file("metadata", allow_config_fallback = FALSE)
     if (!is_valid_file_path(md_path)) {
       return(character(0))
     }
@@ -779,7 +868,7 @@ server <- function(input, output, session) {
   }
 
   get_detected_metadata_groups_by_model <- function() {
-    md_path <- resolve_input_file("metadata")
+    md_path <- resolve_input_file("metadata", allow_config_fallback = FALSE)
     if (!is_valid_file_path(md_path)) {
       return(list())
     }
@@ -924,7 +1013,7 @@ server <- function(input, output, session) {
     mapped_rel
   }
 
-  resolve_input_path <- function(uploaded, external_path, kind) {
+  resolve_input_path <- function(uploaded, external_path, kind, optional = FALSE) {
     if (!is.null(uploaded)) {
       return(file.path("data", basename(uploaded$name)))
     }
@@ -934,11 +1023,13 @@ server <- function(input, output, session) {
       return(ext)
     }
 
-    status_message(paste(
-      "No",
-      kind,
-      "path was provided. Keep existing config value or provide one."
-    ))
+    if (!isTRUE(optional)) {
+      status_message(paste(
+        "No",
+        kind,
+        "path was provided. Keep existing config value or provide one."
+      ))
+    }
     NULL
   }
 
@@ -976,6 +1067,14 @@ server <- function(input, output, session) {
           mapping = mapping
         )
       }
+    }
+
+    if (!is.null(input$injection_order_file)) {
+      file.copy(
+        input$injection_order_file$datapath,
+        file.path(project_root, "data", basename(input$injection_order_file$name)),
+        overwrite = TRUE
+      )
     }
 
     if (!is.null(input$reference_file)) {
@@ -1053,6 +1152,12 @@ server <- function(input, output, session) {
 
     data_path <- resolve_input_path(input$data_file, input$external_data_path, "data")
     metadata_path <- resolve_input_path(input$metadata_file, input$external_metadata_path, "metadata")
+    injection_order_path <- resolve_input_path(
+      input$injection_order_file,
+      input$existing_injection_order_path,
+      "injection order",
+      optional = TRUE
+    )
     reference_path <- resolve_input_path(input$reference_file, input$external_reference_path, "reference")
 
     if (!is.null(data_path)) {
@@ -1071,6 +1176,17 @@ server <- function(input, output, session) {
         metadata_path_cfg <- mapped_rel
       }
       cfg <- replace_or_append(cfg, "metadata_path", dQuote(metadata_path_cfg))
+    }
+
+    normalization_mode_effective <- setting_input_text("normalization_mode", default = "none")
+    if (identical(toupper(normalization_mode_effective), "QC_LOESS")) {
+      cfg <- replace_or_append(
+        cfg,
+        "injection_order_path",
+        dQuote(if (!is.null(injection_order_path)) injection_order_path else "")
+      )
+    } else {
+      cfg <- replace_or_append(cfg, "injection_order_path", dQuote(""))
     }
 
     if (isTRUE(input$use_reference_file) && !is.null(reference_path)) {
@@ -1323,6 +1439,7 @@ server <- function(input, output, session) {
       add = TRUE
     )
     reset_common_inputs()
+    reset_settings_form_inputs()
     updateTextInput(session, "external_data_path", value = "")
     updateTextInput(session, "external_metadata_path", value = "")
     updateTextInput(session, "external_reference_path", value = "")
@@ -1647,6 +1764,121 @@ server <- function(input, output, session) {
     sub(paste0("^", out_norm, "/?"), "", path_norm)
   }
 
+  results_gallery_rules <- list(
+    list(
+      type = "PCA - all samples, group ellipse",
+      pattern = "^pca_active_model_.*_all_tgvswt_.*_ellipse_group\\.(png|jpg|jpeg)$",
+      description = "Model PCA for treatment vs control with point color by group and ellipses by group."
+    ),
+    list(
+      type = "PCA - all samples, sex ellipse",
+      pattern = "^pca_active_model_.*_all_tgvswt_.*_ellipse_sex\\.(png|jpg|jpeg)$",
+      description = "Model PCA for treatment vs control with group/sex mapping and ellipses by sex."
+    ),
+    list(
+      type = "PCA - treatment vs control by sex",
+      pattern = "^pca_active_model_.*_(f|m)_tgvswt_.*\\.(png|jpg|jpeg)$",
+      description = "Sex-specific treatment vs control PCA generated from the comparison subsets."
+    ),
+    list(
+      type = "PCA - female vs male within group",
+      pattern = "^pca_active_model_.*_(tg|wt)_fvsm_.*\\.(png|jpg|jpeg)$",
+      description = "Within-treatment or within-control female vs male PCA."
+    ),
+    list(
+      type = "PCA - biological pre/post normalization",
+      pattern = "^pca_active_model_.*_pre_vs_post_.*\\.(png|jpg|jpeg)$",
+      description = "Biological sample PCA comparing the matrix before and after the selected correction."
+    ),
+    list(
+      type = "PCA - QC pre/post normalization",
+      pattern = "^pca_qc_pre_vs_post_.*\\.(png|jpg|jpeg)$",
+      description = "QC-only PCA audit comparing QC samples before and after the selected correction."
+    ),
+    list(
+      type = "QC audit - RSD pre/post",
+      pattern = "^qc_.*_audit_rsd_pre_vs_post\\.(png|jpg|jpeg)$",
+      description = "QC RSD distribution before vs after correction; lower post-correction values are better."
+    ),
+    list(
+      type = "QC audit - injection-order drift",
+      pattern = "^qc_.*_audit_injection_order_correlation_pre_vs_post\\.(png|jpg|jpeg)$",
+      description = "Absolute Spearman drift correlation with injection order before vs after correction."
+    ),
+    list(
+      type = "QC audit - log2 intensity",
+      pattern = "^qc_.*_audit_qc_log2_intensity_boxplot_pre_vs_post\\.(png|jpg|jpeg)$",
+      description = "QC log2 intensity distribution before vs after correction."
+    ),
+    list(
+      type = "Heatmap - top ranked features",
+      pattern = "^heatmap_top_.*\\.(png|jpg|jpeg)$",
+      description = "Top feature heatmaps ranked from official statistics tables."
+    ),
+    list(
+      type = "Heatmap - significant features",
+      pattern = "^heatmap_sig_.*\\.(png|jpg|jpeg)$",
+      description = "Significant-feature heatmaps when significant heatmap outputs are enabled."
+    ),
+    list(
+      type = "Volcano plot",
+      pattern = "^volcano_.*\\.(png|jpg|jpeg)$",
+      description = "Volcano plots for configured comparisons and metrics."
+    )
+  )
+
+  classify_result_image <- function(path) {
+    file_name <- tolower(basename(path))
+
+    for (rule in results_gallery_rules) {
+      if (grepl(rule$pattern, file_name, ignore.case = TRUE)) {
+        return(rule$type)
+      }
+    }
+
+    if (grepl("pca", file_name, ignore.case = TRUE)) {
+      return("PCA - other")
+    }
+    if (grepl("heatmap", file_name, ignore.case = TRUE)) {
+      return("Heatmap - other")
+    }
+    if (grepl("volcano", file_name, ignore.case = TRUE)) {
+      return("Volcano plot")
+    }
+
+    "Other result figure"
+  }
+
+  build_results_gallery_info <- function(img_files, out_dir) {
+    rows <- lapply(results_gallery_rules, function(rule) {
+      matches <- img_files[grepl(rule$pattern, tolower(basename(img_files)), ignore.case = TRUE)]
+      data.frame(
+        Figure = rule$type,
+        Count = length(matches),
+        Description = rule$description,
+        Example = if (length(matches) > 0) rel_path_from_output(matches[1], out_dir) else "Not generated",
+        stringsAsFactors = FALSE
+      )
+    })
+
+    known <- unique(unlist(lapply(results_gallery_rules, function(rule) {
+      img_files[grepl(rule$pattern, tolower(basename(img_files)), ignore.case = TRUE)]
+    }), use.names = FALSE))
+    other <- setdiff(img_files, known)
+
+    if (length(other) > 0) {
+      rows[[length(rows) + 1]] <- data.frame(
+        Figure = "Other result figure",
+        Count = length(other),
+        Description = "Generated image that does not match one of the named PCA/QC/heatmap/volcano patterns.",
+        Example = rel_path_from_output(other[1], out_dir),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    do.call(rbind, rows)
+  }
+
   build_result_image_src <- function(path) {
     out_dir <- resolve_output_dir_abs()
 
@@ -1678,10 +1910,14 @@ server <- function(input, output, session) {
   }
 
   current_config_text <- function(fallback_text = input$config_text) {
+    cfg <- fallback_text
     if (file.exists(active_config_path)) {
-      return(safe_read_file(active_config_path))
+      cfg <- safe_read_file(active_config_path)
     }
-    fallback_text
+    if (is.null(cfg) || length(cfg) == 0 || all(is.na(cfg))) {
+      cfg <- "# No settings file found in config/."
+    }
+    replace_or_append(cfg, "model_allowed_groups_by_model", "NULL")
   }
 
   observeEvent(TRUE,
@@ -2826,6 +3062,42 @@ server <- function(input, output, session) {
     spacing = "s"
   )
 
+  output$results_gallery_info <- renderTable(
+    {
+      gallery_refresh_tick()
+      invalidateLater(2000, session)
+
+      out_dir <- resolve_output_dir_abs()
+
+      if (!dir.exists(out_dir)) {
+        return(data.frame(
+          Figure = "Output",
+          Count = 0,
+          Description = "Output directory not found yet. Run the pipeline first.",
+          Example = out_dir,
+          stringsAsFactors = FALSE
+        ))
+      }
+
+      img_files <- get_result_image_files()
+
+      if (length(img_files) == 0) {
+        return(data.frame(
+          Figure = "Figures",
+          Count = 0,
+          Description = "No result images found yet. Run the pipeline to generate figures.",
+          Example = "Not generated",
+          stringsAsFactors = FALSE
+        ))
+      }
+
+      build_results_gallery_info(img_files, out_dir)
+    },
+    striped = TRUE,
+    bordered = TRUE,
+    spacing = "s"
+  )
+
   output$results_gallery <- renderUI({
     gallery_refresh_tick()
     invalidateLater(2000, session)
@@ -2847,6 +3119,7 @@ server <- function(input, output, session) {
     cards <- lapply(img_files, function(img_path) {
       rel <- rel_path_from_output(img_path, out_dir)
       src <- paste0(prefix, "/", utils::URLencode(rel, reserved = TRUE))
+      figure_type <- classify_result_image(img_path)
 
       current_selected <- selected_result_image()
       is_active <- !is.null(current_selected) &&
@@ -2857,6 +3130,7 @@ server <- function(input, output, session) {
 
       tags$div(
         class = if (isTRUE(is_active)) "results-gallery-card active" else "results-gallery-card",
+        tags$div(class = "results-gallery-type", figure_type),
         tags$div(class = "results-gallery-name", rel),
         tags$a(
           href = "#",

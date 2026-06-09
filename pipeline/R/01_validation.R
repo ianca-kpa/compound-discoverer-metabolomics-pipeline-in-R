@@ -17,7 +17,7 @@ validate_settings <- function() {
     rsd_thresholds <<- c(20)
   }
   if (!exists("active_variant", inherits = TRUE)) {
-    active_variant <<- "BASE"
+    active_variant <<- "none"
   }
   if (!exists("rsd_filter_metric", inherits = TRUE)) {
     if (exists("active_variant", inherits = TRUE) && grepl("^RSD", as.character(active_variant), ignore.case = TRUE)) {
@@ -53,10 +53,14 @@ validate_settings <- function() {
       QC_LOESS_span <<- 0.75
     }
   }
+  if (!exists("injection_order_path", inherits = TRUE)) {
+    injection_order_path <<- ""
+  }
   stopifnot(is.numeric(loess_min_qc_points), length(loess_min_qc_points) == 1)
   stopifnot(loess_min_qc_points >= 5)
   stopifnot(is.numeric(QC_LOESS_span), length(QC_LOESS_span) == 1)
   stopifnot(QC_LOESS_span > 0, QC_LOESS_span <= 1)
+  stopifnot(is.character(injection_order_path), length(injection_order_path) == 1)
 
   # ---------------------------------------------------------------------------
   # Duplicate handling
@@ -107,6 +111,9 @@ validate_settings <- function() {
   # ---------------------------------------------------------------------------
   # Volcano main style
   # ---------------------------------------------------------------------------
+  if (!exists("volcano_style", inherits = TRUE)) {
+    volcano_style <<- "classic"
+  }
   stopifnot(volcano_style %in% c("classic", "gradual", "both"))
 
   # ---------------------------------------------------------------------------

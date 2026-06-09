@@ -30,6 +30,7 @@ pipeline_root <- file.path(project_root, "pipeline")
 r_dir <- file.path(pipeline_root, "R")
 config_dir <- file.path(pipeline_root, "config")
 app_assets_dir <- file.path(project_root, "app", "assets")
+data_dir <- file.path(project_root, "data")
 
 # Attempt to run the pipeline package installer script if present. This
 # installs CRAN and Bioconductor packages (e.g. limma) so the Shiny app can
@@ -103,6 +104,21 @@ get_pipeline_required_packages <- function(packages_file = file.path(r_dir, "00_
 
 required_packages <- get_pipeline_required_packages()
 
+available_injection_order_files <- function() {
+  if (!dir.exists(data_dir)) {
+    return(character(0))
+  }
+
+  paths <- list.files(
+    data_dir,
+    pattern = "^input[_ -]?order.*\\.(csv|tsv|txt|xlsx|xls)$",
+    full.names = FALSE,
+    ignore.case = TRUE
+  )
+
+  file.path("data", sort(paths))
+}
+
 script_paths <- c(file.path(pipeline_root, "run_pipeline.R"), sort(list.files(
   r_dir,
   pattern = "\\.R$", full.names = TRUE
@@ -138,6 +154,21 @@ extract_config_value <- function(config_text, key) {
   }
 
   raw
+}
+
+replace_or_append_config_line <- function(config_text, key, value_expr) {
+  pattern <- paste0("^\\s*", key, "\\s*<-")
+  replacement <- paste0(key, " <- ", value_expr)
+  lines <- strsplit(config_text, "\\n", fixed = FALSE)[[1]]
+  idx <- grep(pattern, lines)
+
+  if (length(idx) > 0) {
+    lines[idx[1]] <- replacement
+  } else {
+    lines <- c(lines, replacement)
+  }
+
+  paste(lines, collapse = "\n")
 }
 
 is_absolute_path <- function(path) {
@@ -316,13 +347,6 @@ settings_form_sections <- list(
         placeholder = "Example: 10, 15, 20, 30"
       ),
       list(
-        key = "active_variant",
-        label = "Active variant",
-        type = "selectize_text",
-        default = "BASE",
-        choices = c("BASE", "QC_RSD10", "QC_RSD15", "QC_RSD20", "QC_RSD30", "RSD10", "RSD15", "RSD20", "RSD30")
-      ),
-      list(
         key = "low_variance_filter_method",
         label = "Low-variance filter",
         type = "select",
@@ -368,8 +392,7 @@ settings_form_sections <- list(
       list(key = "heatmap_cluster_method", label = "Heatmap cluster method", type = "select", choices = c("ward.D2", "complete", "average"), default = "ward.D2"),
       list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1),
       list(key = "make_volcano_plots", label = "Make volcano plots", type = "logical_select", default = TRUE),
-      list(key = "volcano_add_labels", label = "Add volcano labels", type = "logical_select", default = TRUE),
-      list(key = "volcano_style", label = "Volcano style", type = "select", choices = c("classic", "gradual", "both"), default = "classic")
+      list(key = "volcano_add_labels", label = "Add volcano labels", type = "logical_select", default = TRUE)
     )
   ),
   list(
@@ -419,9 +442,9 @@ settings_glossary_map <- c(
   normalization_mode = "Main normalization after optional weight normalization: none keeps the post-weight matrix, PQN applies QC-reference probabilistic quotient normalization, and QC_LOESS corrects signal drift using QC samples.",
   loess_min_qc_points = "Minimum number of valid QC values required for a feature to receive QC-LOESS drift correction.",
   QC_LOESS_span = "LOESS smoothing span for QC-LOESS. Smaller values follow local drift more closely; larger values smooth more strongly.",
-  rsd_filter_metric = "Controls RSD-based variant creation: none keeps BASE, qc_rsd filters by QC sample RSD, and rsd filters by biological/sample RSD.",
+  injection_order_path = "Optional separate sample/run-order table for QC-LOESS. Supports sample plus injection_order/run_order columns, or Compound Discoverer File Name plus Creation Date exports.",
+  rsd_filter_metric = "Controls RSD-based variant creation: none skips RSD filtering, qc_rsd filters by QC sample RSD, and rsd filters by biological/sample RSD.",
   rsd_thresholds = "Numeric RSD cutoffs used to create variants such as QC_RSD20 or RSD20.",
-  active_variant = "Selects which RSD-filtered variant is used downstream for duplicate handling, statistics, plots, and exports. BASE disables RSD filtering.",
   low_variance_filter_method = "Low-variance feature filtering method. none disables it; iqr removes features with the lowest interquartile range.",
   low_variance_filter_fraction = "Fraction of lowest-IQR features removed when low_variance_filter_method is iqr.",
   duplicate_name_strategy = "Sets how duplicate named features are merged or kept: reference matching, best QC RSD, mean, sum, or separate features.",
@@ -447,14 +470,19 @@ settings_glossary_map <- c(
   save_stats_excel_per_model = "TRUE saves an Excel workbook with statistics split by model and comparison.",
   save_sig_metabolites_txt_per_model = "TRUE saves plain-text lists of significant metabolites for each comparison.",
   make_volcano_plots = "TRUE generates volcano plot figures for configured comparisons.",
-  volcano_style = "Volcano plot style: classic, gradual, or both.",
   volcano_add_labels = "TRUE adds labels to selected/significant volcano plot points.",
   minimal_output = "TRUE keeps selected plots/statistics while skipping selected intermediate global exports."
 )
 
 read_initial_config <- function() {
   if (file.exists(active_config_path)) {
-    return(safe_read_file(active_config_path))
+    config_text <- safe_read_file(active_config_path)
+    config_text <- replace_or_append_config_line(
+      config_text,
+      "model_allowed_groups_by_model",
+      "NULL"
+    )
+    return(config_text)
   }
   "# No settings file found in config/."
 }

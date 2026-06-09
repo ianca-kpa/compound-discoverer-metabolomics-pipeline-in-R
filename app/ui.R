@@ -64,6 +64,27 @@ ui <- fluidPage(
             accept = c(".csv", ".tsv", ".txt", ".xlsx", ".xls")
           )
         ),
+        conditionalPanel(
+          condition = "input.settings_normalization_mode == 'QC_LOESS'",
+          selectInput(
+            "existing_injection_order_path",
+            "Existing input_order file",
+            choices = c("None" = "", available_injection_order_files()),
+            selected = ""
+          ),
+          div(
+            class = "big-file-input",
+            fileInput(
+              "injection_order_file",
+              "Injection order file (QC-LOESS)",
+              accept = c(".csv", ".tsv", ".txt", ".xlsx", ".xls")
+            )
+          ),
+          tags$p(
+            class = "small-note",
+            "Supports sample + order columns, or Compound Discoverer File Name + Creation Date exports. Upload overrides the existing-file choice."
+          )
+        ),
         checkboxInput(
           "manual_metadata_cols",
           "Manually map metadata columns",
@@ -245,6 +266,13 @@ ui <- fluidPage(
               "Retained features, QC/sample RSD, IQR filtering, QC-LOESS drift audit, and PCA figure counts from the latest run."
             ),
             tableOutput("qc_pca_comparison_summary"),
+            tags$hr(),
+            h4("Figure guide"),
+            tags$p(
+              class = "small-note",
+              "Counts and descriptions for the figures shown in the gallery, using the PCA/QC audit naming rules from the pipeline."
+            ),
+            tableOutput("results_gallery_info"),
             tags$hr(),
             h4("Figures"),
             uiOutput("results_gallery")
