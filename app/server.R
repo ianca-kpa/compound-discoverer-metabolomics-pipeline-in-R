@@ -1646,6 +1646,24 @@ server <- function(input, output, session) {
     format(round(as.numeric(value)[1], digits), trim = TRUE, scientific = FALSE)
   }
 
+  format_count_percent <- function(count, total, digits = 1) {
+    count <- as.numeric(count)[1]
+    total <- as.numeric(total)[1]
+
+    if (is.na(count) || is.na(total) || total <= 0) {
+      return("NA")
+    }
+
+    paste0(
+      format_summary_number(count, digits = 0),
+      " / ",
+      format_summary_number(total, digits = 0),
+      " (",
+      format_summary_number(100 * count / total, digits = digits),
+      "%)"
+    )
+  }
+
   current_normalization_label <- function() {
     raw_mode <- safe_trimws(input[[setting_input_id("normalization_mode")]])
 
@@ -1762,121 +1780,6 @@ server <- function(input, output, session) {
     path_norm <- gsub("\\\\", "/", normalizePath(path, winslash = "/", mustWork = FALSE))
     out_norm <- gsub("\\\\", "/", normalizePath(out_dir, winslash = "/", mustWork = FALSE))
     sub(paste0("^", out_norm, "/?"), "", path_norm)
-  }
-
-  results_gallery_rules <- list(
-    list(
-      type = "PCA - all samples, group ellipse",
-      pattern = "^pca_active_model_.*_all_tgvswt_.*_ellipse_group\\.(png|jpg|jpeg)$",
-      description = "Model PCA for treatment vs control with point color by group and ellipses by group."
-    ),
-    list(
-      type = "PCA - all samples, sex ellipse",
-      pattern = "^pca_active_model_.*_all_tgvswt_.*_ellipse_sex\\.(png|jpg|jpeg)$",
-      description = "Model PCA for treatment vs control with group/sex mapping and ellipses by sex."
-    ),
-    list(
-      type = "PCA - treatment vs control by sex",
-      pattern = "^pca_active_model_.*_(f|m)_tgvswt_.*\\.(png|jpg|jpeg)$",
-      description = "Sex-specific treatment vs control PCA generated from the comparison subsets."
-    ),
-    list(
-      type = "PCA - female vs male within group",
-      pattern = "^pca_active_model_.*_(tg|wt)_fvsm_.*\\.(png|jpg|jpeg)$",
-      description = "Within-treatment or within-control female vs male PCA."
-    ),
-    list(
-      type = "PCA - biological pre/post normalization",
-      pattern = "^pca_active_model_.*_pre_vs_post_.*\\.(png|jpg|jpeg)$",
-      description = "Biological sample PCA comparing the matrix before and after the selected correction."
-    ),
-    list(
-      type = "PCA - QC pre/post normalization",
-      pattern = "^pca_qc_pre_vs_post_.*\\.(png|jpg|jpeg)$",
-      description = "QC-only PCA audit comparing QC samples before and after the selected correction."
-    ),
-    list(
-      type = "QC audit - RSD pre/post",
-      pattern = "^qc_.*_audit_rsd_pre_vs_post\\.(png|jpg|jpeg)$",
-      description = "QC RSD distribution before vs after correction; lower post-correction values are better."
-    ),
-    list(
-      type = "QC audit - injection-order drift",
-      pattern = "^qc_.*_audit_injection_order_correlation_pre_vs_post\\.(png|jpg|jpeg)$",
-      description = "Absolute Spearman drift correlation with injection order before vs after correction."
-    ),
-    list(
-      type = "QC audit - log2 intensity",
-      pattern = "^qc_.*_audit_qc_log2_intensity_boxplot_pre_vs_post\\.(png|jpg|jpeg)$",
-      description = "QC log2 intensity distribution before vs after correction."
-    ),
-    list(
-      type = "Heatmap - top ranked features",
-      pattern = "^heatmap_top_.*\\.(png|jpg|jpeg)$",
-      description = "Top feature heatmaps ranked from official statistics tables."
-    ),
-    list(
-      type = "Heatmap - significant features",
-      pattern = "^heatmap_sig_.*\\.(png|jpg|jpeg)$",
-      description = "Significant-feature heatmaps when significant heatmap outputs are enabled."
-    ),
-    list(
-      type = "Volcano plot",
-      pattern = "^volcano_.*\\.(png|jpg|jpeg)$",
-      description = "Volcano plots for configured comparisons and metrics."
-    )
-  )
-
-  classify_result_image <- function(path) {
-    file_name <- tolower(basename(path))
-
-    for (rule in results_gallery_rules) {
-      if (grepl(rule$pattern, file_name, ignore.case = TRUE)) {
-        return(rule$type)
-      }
-    }
-
-    if (grepl("pca", file_name, ignore.case = TRUE)) {
-      return("PCA - other")
-    }
-    if (grepl("heatmap", file_name, ignore.case = TRUE)) {
-      return("Heatmap - other")
-    }
-    if (grepl("volcano", file_name, ignore.case = TRUE)) {
-      return("Volcano plot")
-    }
-
-    "Other result figure"
-  }
-
-  build_results_gallery_info <- function(img_files, out_dir) {
-    rows <- lapply(results_gallery_rules, function(rule) {
-      matches <- img_files[grepl(rule$pattern, tolower(basename(img_files)), ignore.case = TRUE)]
-      data.frame(
-        Figure = rule$type,
-        Count = length(matches),
-        Description = rule$description,
-        Example = if (length(matches) > 0) rel_path_from_output(matches[1], out_dir) else "Not generated",
-        stringsAsFactors = FALSE
-      )
-    })
-
-    known <- unique(unlist(lapply(results_gallery_rules, function(rule) {
-      img_files[grepl(rule$pattern, tolower(basename(img_files)), ignore.case = TRUE)]
-    }), use.names = FALSE))
-    other <- setdiff(img_files, known)
-
-    if (length(other) > 0) {
-      rows[[length(rows) + 1]] <- data.frame(
-        Figure = "Other result figure",
-        Count = length(other),
-        Description = "Generated image that does not match one of the named PCA/QC/heatmap/volcano patterns.",
-        Example = rel_path_from_output(other[1], out_dir),
-        stringsAsFactors = FALSE
-      )
-    }
-
-    do.call(rbind, rows)
   }
 
   build_result_image_src <- function(path) {
@@ -2971,7 +2874,7 @@ server <- function(input, output, session) {
           )
           add_row(
             "QC RSD <= 30%",
-            paste0(sum(rsd_values <= 30, na.rm = TRUE), " / ", sum(!is.na(rsd_values))),
+            format_count_percent(sum(rsd_values <= 30, na.rm = TRUE), sum(!is.na(rsd_values))),
             rel_path_from_output(qc_rsd_path, out_dir)
           )
         } else {
@@ -2994,7 +2897,7 @@ server <- function(input, output, session) {
           )
           add_row(
             "Sample RSD <= 30%",
-            paste0(sum(sample_rsd_values <= 30, na.rm = TRUE), " / ", sum(!is.na(sample_rsd_values))),
+            format_count_percent(sum(sample_rsd_values <= 30, na.rm = TRUE), sum(!is.na(sample_rsd_values))),
             rel_path_from_output(sample_rsd_path, out_dir)
           )
         } else {
@@ -3008,16 +2911,26 @@ server <- function(input, output, session) {
       iqr_audit <- read_result_csv(iqr_audit_path)
       if (!is.null(iqr_audit) && nrow(iqr_audit) > 0 && "kept" %in% names(iqr_audit)) {
         kept_values <- toupper(as.character(iqr_audit$kept)) %in% c("TRUE", "1", "YES")
+        removed_n <- sum(!kept_values, na.rm = TRUE)
         add_row(
           "IQR low-variance filter",
-          paste0(sum(!kept_values, na.rm = TRUE), " removed / ", nrow(iqr_audit), " audited"),
+          paste0(format_count_percent(removed_n, nrow(iqr_audit)), " removed"),
           rel_path_from_output(iqr_audit_path, out_dir)
         )
       } else {
         add_row("IQR low-variance filter", "Not available or disabled", "low_variance_iqr_audit_ACTIVE.csv")
       }
 
-      loess_path <- file.path(exports_dir, "06_loess_qc_correction_audit_weight_then_LOESS.csv")
+      loess_candidates <- c(
+        file.path(exports_dir, "06_loess_qc_correction_audit_weight_then_LOESS.csv"),
+        list.files(
+          exports_dir,
+          pattern = "^06_loess_qc_correction_audit.*\\.csv$",
+          full.names = TRUE,
+          ignore.case = TRUE
+        )
+      )
+      loess_path <- loess_candidates[file.exists(loess_candidates)][1]
       loess_audit <- read_result_csv(loess_path)
       if (!is.null(loess_audit) && nrow(loess_audit) > 0) {
         corrected_col <- intersect(c("corrected", "loess_corrected"), names(loess_audit))
@@ -3028,12 +2941,83 @@ server <- function(input, output, session) {
         }
 
         add_row(
-          "Drift correction / residual audit",
-          paste0(ifelse(is.na(corrected_n), "NA", corrected_n), " corrected / ", nrow(loess_audit), " audited"),
+          "Drift correction modified features",
+          format_count_percent(corrected_n, nrow(loess_audit)),
           rel_path_from_output(loess_path, out_dir)
         )
+
+        if (!is.na(corrected_n)) {
+          add_row(
+            "Drift correction unchanged features",
+            format_count_percent(nrow(loess_audit) - corrected_n, nrow(loess_audit)),
+            rel_path_from_output(loess_path, out_dir)
+          )
+        }
+
+        qc_points_col <- intersect(c("qc_points_used", "n_qc_points"), names(loess_audit))
+        if (length(qc_points_col) > 0) {
+          qc_points <- as.numeric(loess_audit[[qc_points_col[1]]])
+          add_row(
+            "Median QC points used for drift correction",
+            format_summary_number(stats::median(qc_points, na.rm = TRUE), digits = 0),
+            rel_path_from_output(loess_path, out_dir)
+          )
+        }
       } else {
-        add_row("Drift correction / residual audit", "Not available", "QC-LOESS audit file not found")
+        add_row("Drift correction modified features", "Not available", "QC-LOESS audit file not found")
+      }
+
+      loess_metrics_candidates <- list.files(
+        audits_dir,
+        pattern = "^(QC_.*audit_feature_metrics|.*LOESS.*feature_metrics)\\.csv$",
+        full.names = TRUE,
+        ignore.case = TRUE
+      )
+      loess_metrics_path <- loess_metrics_candidates[file.exists(loess_metrics_candidates)][1]
+      loess_metrics <- read_result_csv(loess_metrics_path)
+      if (!is.null(loess_metrics) && nrow(loess_metrics) > 0) {
+        if ("rsd_improved" %in% names(loess_metrics)) {
+          improved <- toupper(as.character(loess_metrics$rsd_improved)) %in% c("TRUE", "1", "YES")
+          add_row(
+            "QC RSD improved after drift correction",
+            format_count_percent(sum(improved, na.rm = TRUE), sum(!is.na(loess_metrics$rsd_improved))),
+            rel_path_from_output(loess_metrics_path, out_dir)
+          )
+        }
+
+        if (all(c("qc_rsd_pre", "qc_rsd_post") %in% names(loess_metrics))) {
+          add_row(
+            "Median QC RSD pre -> post drift correction",
+            paste0(
+              format_summary_number(stats::median(as.numeric(loess_metrics$qc_rsd_pre), na.rm = TRUE)),
+              "% -> ",
+              format_summary_number(stats::median(as.numeric(loess_metrics$qc_rsd_post), na.rm = TRUE)),
+              "%"
+            ),
+            rel_path_from_output(loess_metrics_path, out_dir)
+          )
+        }
+
+        if ("drift_improved" %in% names(loess_metrics)) {
+          improved <- toupper(as.character(loess_metrics$drift_improved)) %in% c("TRUE", "1", "YES")
+          add_row(
+            "Residual drift improved after correction",
+            format_count_percent(sum(improved, na.rm = TRUE), sum(!is.na(loess_metrics$drift_improved))),
+            rel_path_from_output(loess_metrics_path, out_dir)
+          )
+        }
+
+        if (all(c("abs_drift_cor_pre", "abs_drift_cor_post") %in% names(loess_metrics))) {
+          add_row(
+            "Median absolute drift correlation pre -> post",
+            paste0(
+              format_summary_number(stats::median(as.numeric(loess_metrics$abs_drift_cor_pre), na.rm = TRUE), digits = 3),
+              " -> ",
+              format_summary_number(stats::median(as.numeric(loess_metrics$abs_drift_cor_post), na.rm = TRUE), digits = 3)
+            ),
+            rel_path_from_output(loess_metrics_path, out_dir)
+          )
+        }
       }
 
       pca_files <- list.files(
@@ -3062,42 +3046,6 @@ server <- function(input, output, session) {
     spacing = "s"
   )
 
-  output$results_gallery_info <- renderTable(
-    {
-      gallery_refresh_tick()
-      invalidateLater(2000, session)
-
-      out_dir <- resolve_output_dir_abs()
-
-      if (!dir.exists(out_dir)) {
-        return(data.frame(
-          Figure = "Output",
-          Count = 0,
-          Description = "Output directory not found yet. Run the pipeline first.",
-          Example = out_dir,
-          stringsAsFactors = FALSE
-        ))
-      }
-
-      img_files <- get_result_image_files()
-
-      if (length(img_files) == 0) {
-        return(data.frame(
-          Figure = "Figures",
-          Count = 0,
-          Description = "No result images found yet. Run the pipeline to generate figures.",
-          Example = "Not generated",
-          stringsAsFactors = FALSE
-        ))
-      }
-
-      build_results_gallery_info(img_files, out_dir)
-    },
-    striped = TRUE,
-    bordered = TRUE,
-    spacing = "s"
-  )
-
   output$results_gallery <- renderUI({
     gallery_refresh_tick()
     invalidateLater(2000, session)
@@ -3119,7 +3067,6 @@ server <- function(input, output, session) {
     cards <- lapply(img_files, function(img_path) {
       rel <- rel_path_from_output(img_path, out_dir)
       src <- paste0(prefix, "/", utils::URLencode(rel, reserved = TRUE))
-      figure_type <- classify_result_image(img_path)
 
       current_selected <- selected_result_image()
       is_active <- !is.null(current_selected) &&
@@ -3130,7 +3077,6 @@ server <- function(input, output, session) {
 
       tags$div(
         class = if (isTRUE(is_active)) "results-gallery-card active" else "results-gallery-card",
-        tags$div(class = "results-gallery-type", figure_type),
         tags$div(class = "results-gallery-name", rel),
         tags$a(
           href = "#",

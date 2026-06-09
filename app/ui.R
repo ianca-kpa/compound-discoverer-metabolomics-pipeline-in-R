@@ -267,13 +267,6 @@ ui <- fluidPage(
             ),
             tableOutput("qc_pca_comparison_summary"),
             tags$hr(),
-            h4("Figure guide"),
-            tags$p(
-              class = "small-note",
-              "Counts and descriptions for the figures shown in the gallery, using the PCA/QC audit naming rules from the pipeline."
-            ),
-            tableOutput("results_gallery_info"),
-            tags$hr(),
             h4("Figures"),
             uiOutput("results_gallery")
           )
