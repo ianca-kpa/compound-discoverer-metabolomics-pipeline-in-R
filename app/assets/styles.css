@@ -610,6 +610,20 @@ label[for="settings_ellipse_positive"] {
 	box-shadow: none;
 }
 
+.big-file-input .progress {
+	display: block !important;
+	height: 20px;
+	margin-top: 6px;
+	margin-bottom: 10px;
+	overflow: visible;
+}
+
+.big-file-input .progress-bar {
+	line-height: 20px;
+	white-space: nowrap;
+	min-width: 110px;
+}
+
 .output-dir-block {
 	margin-bottom: 10px;
 }

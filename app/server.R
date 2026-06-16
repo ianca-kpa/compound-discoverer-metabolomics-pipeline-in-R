@@ -54,7 +54,7 @@ server <- function(input, output, session) {
     reset_reference_columns()
     selected_result_image(NULL)
     pipeline_log_text("No run executed yet.")
-    gallery_refresh_tick(gallery_refresh_tick() + 1)
+    gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
     inputs_cleared_timestamp(Sys.time())
   }
 
@@ -487,7 +487,7 @@ server <- function(input, output, session) {
       tags$div(
         class = "settings-action-copy",
         tags$strong("Settings form"),
-        tags$span("Current values are applied when running the pipeline.")
+        tags$span("Current values are applied when running the pipeline.", style = "font-size: 13px;")
       ),
       actionButton("save_settings_form", "Save config/settings.R from form", icon = icon("save"))
     )
@@ -1335,7 +1335,7 @@ server <- function(input, output, session) {
 
   launch_pipeline <- function() {
     results_cleared(FALSE)
-    gallery_refresh_tick(gallery_refresh_tick() + 1)
+    gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
 
     rscript_cmd <- file.path(R.home("bin"), "Rscript")
     if (.Platform$OS.type == "windows") {
@@ -1460,7 +1460,7 @@ server <- function(input, output, session) {
     updateTextAreaInput(session, "config_text", value = cfg)
     gallery_state$dir <- NULL
     gallery_state$prefix <- NULL
-    gallery_refresh_tick(gallery_refresh_tick() + 1)
+    gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
     process_state$log_file <- NULL
     process_state$pipeline_log_file <- NULL
     process_state$proc <- NULL
@@ -2073,6 +2073,7 @@ server <- function(input, output, session) {
 
     alias_boxes <- lapply(models, function(model_name) {
       detected_groups <- model_groups[[model_name]]
+
       detected_groups_text <- if (length(detected_groups) == 0) {
         "None detected"
       } else {
@@ -2098,16 +2099,8 @@ server <- function(input, output, session) {
     })
 
     tags$div(
-      style = "margin-top: 10px;",
-      tags$h5("Allowed metadata groups by model"),
-      tags$p(
-        class = "small-note",
-        "Use one box per model. The first value is treated as control and the second as test."
-      ),
-      tags$div(
-        class = "model-allowed-groups-list",
-        do.call(tagList, alias_boxes)
-      )
+      class = "model-allowed-groups-list",
+      do.call(tagList, alias_boxes)
     )
   })
 
@@ -2135,7 +2128,7 @@ server <- function(input, output, session) {
   observeEvent(input$refresh_results_gallery,
     {
       results_cleared(FALSE)
-      gallery_refresh_tick(gallery_refresh_tick() + 1)
+      gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
       selected_result_image(NULL)
       status_message("Results gallery refreshed.")
     },
