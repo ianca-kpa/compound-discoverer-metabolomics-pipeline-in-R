@@ -35,6 +35,17 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
   export_all_pairwise_multigroup <- output_flags$export_all_pairwise_multigroup
   debug_mode <- export_debug_outputs
   minimal_output_enabled <- identical(output_level_local, "minimal")
+  full_output_enables <- function(value) isTRUE(value) || isTRUE(export_debug_outputs)
+  export_metaboanalyst_ready_effective <- full_output_enables(export_metaboanalyst_ready)
+  export_metaboanalyst_duplicate_only_effective <- full_output_enables(export_metaboanalyst_duplicate_only)
+  make_volcano_plots_effective <- full_output_enables(make_volcano_plots)
+  save_stats_excel_per_model_effective <- full_output_enables(save_stats_excel_per_model)
+  save_sig_metabolites_txt_per_model_effective <- full_output_enables(save_sig_metabolites_txt_per_model)
+  make_heatmap_by_model_effective <- full_output_enables(make_heatmap_by_model)
+  make_heatmap_by_model_sex_effective <- full_output_enables(make_heatmap_by_model_sex)
+  make_sig_heatmap_by_model_effective <- full_output_enables(make_sig_heatmap_by_model)
+  make_sig_heatmap_by_model_sex_effective <- full_output_enables(make_sig_heatmap_by_model_sex)
+  make_sig_heatmap_FvsM_within_group_effective <- full_output_enables(make_sig_heatmap_FvsM_within_group)
   comparison_group_control <- get0("comparison_group_control", ifnotfound = "WT", inherits = TRUE)
   comparison_group_treatment <- get0("comparison_group_treatment", ifnotfound = "TG", inherits = TRUE)
   active_variant_requested <- as.character(get0("active_variant", ifnotfound = "none", inherits = TRUE))[1]
@@ -1026,7 +1037,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       log_written_object(log_path, out_final_biological_matrix, mat_log2_final, note = "final biological log2 matrix without QC")
     }
 
-    if (isTRUE(export_intermediate_tables)) {
+    if (isTRUE(export_intermediate_tables) && isTRUE(export_metaboanalyst_ready_effective)) {
       export_metaboanalyst_global_raw(
         raw_df = base_raw_df,
         metadata_aligned = metadata_aligned,
@@ -1041,9 +1052,11 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
     if (identical(normalization_mode_local, "weight")) {
       step_info("MetaboAnalyst export values: weight-normalized only.")
     }
-    step_info("MetaboAnalyst export enabled: ", export_metaboanalyst_ready)
+    step_info("MetaboAnalyst export enabled: ", export_metaboanalyst_ready_effective)
 
     if (isTRUE(export_intermediate_tables) &&
+        isTRUE(export_metaboanalyst_ready_effective) &&
+        isTRUE(export_metaboanalyst_duplicate_only_effective) &&
         exists("metaboanalyst_duplicate_only_mat", inherits = FALSE)) {
       dup_only_df <- as.data.frame(metaboanalyst_duplicate_only_mat, check.names = FALSE) %>%
         tibble::rownames_to_column("sample")
@@ -1058,7 +1071,9 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       )
     }
 
-    if (isTRUE(export_intermediate_tables) && exists("metaboanalyst_compatible_iqr_mat", inherits = FALSE)) {
+    if (isTRUE(export_intermediate_tables) &&
+        isTRUE(export_metaboanalyst_ready_effective) &&
+        exists("metaboanalyst_compatible_iqr_mat", inherits = FALSE)) {
       compatible_iqr_df <- as.data.frame(metaboanalyst_compatible_iqr_mat, check.names = FALSE) %>%
         tibble::rownames_to_column("sample")
 
@@ -1074,7 +1089,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       )
       step_info("MetaboAnalyst compatible IQR export: duplicate handling + IQR only; do not apply IQR again on the site.")
     }
-    step_info("MetaboAnalyst duplicate-only export enabled: ", export_metaboanalyst_duplicate_only)
+    step_info("MetaboAnalyst duplicate-only export enabled: ", export_metaboanalyst_duplicate_only_effective)
     step_ok("Exporting raw data for MetaboAnalyst and final biological matrix", t_step)
 
     # -------------------------------------------------------------------------
@@ -1238,7 +1253,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
           fdr_cutoff = fdr_cutoff,
           fc_cutoff_log2 = fc_cutoff_log2,
           run_metrics = run_metrics,
-          make_volcano_plots = TRUE,
+          make_volcano_plots = make_volcano_plots_effective,
           volcano_style = volcano_style,
           comparison_configs = COMPARISON_CONFIGS,
           statistical_test_type = statistical_test_type,
@@ -1256,7 +1271,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       # -----------------------------------------------------------------------
       # Top heatmaps by model
       # -----------------------------------------------------------------------
-      if (!isTRUE(minimal_output_enabled)) {
+      if (!isTRUE(minimal_output_enabled) && isTRUE(make_heatmap_by_model_effective)) {
         step_info("TOP heatmaps per model (loop rank metrics)...")
 
         profile_expr("Top heatmaps by model", {
@@ -1300,7 +1315,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       # -----------------------------------------------------------------------
       # Top heatmaps by model and sex
       # -----------------------------------------------------------------------
-      if (isTRUE(export_all_plots)) {
+      if (isTRUE(export_all_plots) && isTRUE(make_heatmap_by_model_sex_effective)) {
         step_info("TOP heatmaps per model split by sex (loop rank metrics)...")
 
         profile_expr("Top heatmaps by model and sex", {
@@ -1341,7 +1356,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
         }, category = "plot")
       }
 
-      {
+      if (isTRUE(save_stats_excel_per_model_effective)) {
         step_info("Exporting stats to Excel (README + 5 tabs per model)...")
 
         profile_expr("Stats Excel export", {
@@ -1367,7 +1382,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
         }, category = "export")
       }
 
-      if (isTRUE(export_debug_outputs)) {
+      if (isTRUE(export_debug_outputs) && isTRUE(save_sig_metabolites_txt_per_model_effective)) {
         step_info("Exporting significant metabolites TXT files per model/comparison...")
 
         profile_expr("Significant metabolites TXT export", {
@@ -1390,7 +1405,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       # -----------------------------------------------------------------------
       # Significant heatmaps by model (ALL sex TG vs WT)
       # -----------------------------------------------------------------------
-      if (isTRUE(export_all_plots)) {
+      if (isTRUE(export_all_plots) && isTRUE(make_sig_heatmap_by_model_effective)) {
         profile_expr("Significant heatmaps by model", {
           step_info("Significant heatmaps (ALL sex ", comparison_group_treatment, "/", comparison_group_control, ") for BOTH metrics...")
 
@@ -1413,9 +1428,10 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
               if (!is.null(st)) {
                 out_png <- file.path(
                   mp$plots$heatmap_significant_all,
-                  paste0(
-                    "HEATMAP_SIG_ACTIVE_ALL_", comparison_label, "_", met, "_lt_", current_alpha,
-                    "_model_", m, "_scale_", heatmap_scale_method, ".png"
+                  make_compact_output_filename(
+                    "HM_SIG", "ALL", comparison_label, met, paste0("lt", current_alpha),
+                    paste0("m", m), paste0("s", heatmap_scale_method),
+                    ext = "png"
                   )
                 )
 
@@ -1448,7 +1464,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       # -----------------------------------------------------------------------
       # Significant heatmaps by model and sex (TG vs WT within F and within M)
       # -----------------------------------------------------------------------
-      if (isTRUE(export_all_plots)) {
+      if (isTRUE(export_all_plots) && isTRUE(make_sig_heatmap_by_model_sex_effective)) {
         profile_expr("Significant heatmaps by model and sex", {
           step_info("Significant heatmaps (", comparison_group_treatment, "/", comparison_group_control, ") BY sex for BOTH metrics...")
 
@@ -1474,9 +1490,10 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
 
                 out_png <- file.path(
                   mp$plots$heatmap_significant_by_sex,
-                  paste0(
-                    "HEATMAP_SIG_ACTIVE_", sx, "_", model_groups$treatment, "vs", model_groups$control, "_", met, "_lt_", current_alpha,
-                    "_model_", m, "_scale_", heatmap_scale_method, ".png"
+                  make_compact_output_filename(
+                    "HM_SIG", sx, paste0(model_groups$treatment, "vs", model_groups$control),
+                    met, paste0("lt", current_alpha), paste0("m", m), paste0("s", heatmap_scale_method),
+                    ext = "png"
                   )
                 )
 
@@ -1510,7 +1527,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       # -----------------------------------------------------------------------
       # Significant heatmaps by model and sex (FvsM within treatment and within control)
       # -----------------------------------------------------------------------
-      if (isTRUE(export_all_plots)) {
+      if (isTRUE(export_all_plots) && isTRUE(make_sig_heatmap_FvsM_within_group_effective)) {
         profile_expr("Significant heatmaps FvsM within group", {
           step_info("Significant heatmaps (FvsM within ", comparison_group_treatment, " and ", comparison_group_control, ") for BOTH metrics...")
 
@@ -1529,9 +1546,10 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
               if (!is.null(st_tg)) {
                 out_png_tg <- file.path(
                   mp$plots$heatmap_significant_tg_f_vs_tg_m,
-                  paste0(
-                    "HEATMAP_SIG_ACTIVE_", model_groups$treatment, "_FvsM_", met, "_lt_", current_alpha,
-                    "_model_", m, "_scale_", heatmap_scale_method, ".png"
+                  make_compact_output_filename(
+                    "HM_SIG", model_groups$treatment, "FvsM", met, paste0("lt", current_alpha),
+                    paste0("m", m), paste0("s", heatmap_scale_method),
+                    ext = "png"
                   )
                 )
 
@@ -1564,9 +1582,10 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
               if (!is.null(st_wt)) {
                 out_png_wt <- file.path(
                   mp$plots$heatmap_significant_wt_f_vs_wt_m,
-                  paste0(
-                    "HEATMAP_SIG_ACTIVE_", model_groups$control, "_FvsM_", met, "_lt_", current_alpha,
-                    "_model_", m, "_scale_", heatmap_scale_method, ".png"
+                  make_compact_output_filename(
+                    "HM_SIG", model_groups$control, "FvsM", met, paste0("lt", current_alpha),
+                    paste0("m", m), paste0("s", heatmap_scale_method),
+                    ext = "png"
                   )
                 )
 
@@ -1596,17 +1615,17 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
         }, category = "plot")
       }
 
-      step_info("Volcano plots enabled: ", make_volcano_plots)
+      step_info("Volcano plots enabled: ", make_volcano_plots_effective)
       step_info("Volcano metrics: ", paste(run_metrics_expanded, collapse = ", "))
       step_info("Top heatmaps metrics: ", paste(heatmap_rank_metrics_expanded, collapse = ", "))
       step_info("Significant heatmaps metrics: ", paste(run_metrics_expanded, collapse = ", "))
-      step_info("Stats Excel export enabled: ", save_stats_excel_per_model)
-      step_info("Top heatmaps by model enabled: ", make_heatmap_by_model)
-      step_info("Top heatmaps by model and sex enabled: ", make_heatmap_by_model_sex)
+      step_info("Stats Excel export enabled: ", save_stats_excel_per_model_effective)
+      step_info("Top heatmaps by model enabled: ", make_heatmap_by_model_effective)
+      step_info("Top heatmaps by model and sex enabled: ", make_heatmap_by_model_sex_effective)
       step_info("Top heatmaps FvsM")
-      step_info("Significant heatmaps by model enabled: ", make_sig_heatmap_by_model)
-      step_info("Significant heatmaps by model and sex enabled: ", make_sig_heatmap_by_model_sex)
-      step_info("Significant heatmaps FvsM enabled: ", make_sig_heatmap_FvsM_within_group)
+      step_info("Significant heatmaps by model enabled: ", make_sig_heatmap_by_model_effective)
+      step_info("Significant heatmaps by model and sex enabled: ", make_sig_heatmap_by_model_sex_effective)
+      step_info("Significant heatmaps FvsM enabled: ", make_sig_heatmap_FvsM_within_group_effective)
       step_ok("Generating statistics, volcano plots, stats Excel, and heatmaps", t_step)
       # -------------------------------------------------------------------------
       # Finalize filter summary table and save

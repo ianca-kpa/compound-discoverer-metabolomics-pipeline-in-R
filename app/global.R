@@ -7,6 +7,7 @@ pipeline_root <- file.path(project_root, "pipeline")
 r_dir <- file.path(pipeline_root, "R")
 config_dir <- file.path(pipeline_root, "config")
 app_assets_dir <- file.path(project_root, "app", "assets")
+app_helpers_dir <- file.path(project_root, "app", "helpers")
 
 # Attempt to run the pipeline package installer script if present. This
 # installs CRAN and Bioconductor packages (e.g. limma) so the Shiny app can
@@ -27,16 +28,28 @@ helpers_path <- file.path(pipeline_root, "R", "03_helpers_io_log.R")
 if (file.exists(helpers_path)) source(helpers_path)
 active_config_path <- file.path(config_dir, "settings.R")
 
-app_helpers_path <- file.path(project_root, "app", "helpers.R")
+app_helpers_path <- file.path(app_helpers_dir, "helpers.R")
 if (file.exists(app_helpers_path)) source(app_helpers_path)
 
-server_util_helpers_path <- file.path(project_root, "app", "server_util_helpers.R")
+server_util_helpers_path <- file.path(app_helpers_dir, "server_util_helpers.R")
 if (file.exists(server_util_helpers_path)) source(server_util_helpers_path)
 
-server_settings_helpers_path <- file.path(project_root, "app", "server_settings_helpers.R")
+server_settings_helpers_path <- file.path(app_helpers_dir, "server_settings_helpers.R")
 if (file.exists(server_settings_helpers_path)) source(server_settings_helpers_path)
 
-metadata_helpers_path <- file.path(project_root, "app", "metadata_helpers.R")
+server_gallery_helpers_path <- file.path(app_helpers_dir, "server_gallery_helpers.R")
+if (file.exists(server_gallery_helpers_path)) source(server_gallery_helpers_path)
+
+server_pipeline_helpers_path <- file.path(app_helpers_dir, "server_pipeline_helpers.R")
+if (file.exists(server_pipeline_helpers_path)) source(server_pipeline_helpers_path)
+
+server_input_helpers_path <- file.path(app_helpers_dir, "server_input_helpers.R")
+if (file.exists(server_input_helpers_path)) source(server_input_helpers_path)
+
+server_data_overview_helpers_path <- file.path(app_helpers_dir, "server_data_overview_helpers.R")
+if (file.exists(server_data_overview_helpers_path)) source(server_data_overview_helpers_path)
+
+metadata_helpers_path <- file.path(app_helpers_dir, "metadata_helpers.R")
 if (file.exists(metadata_helpers_path)) source(metadata_helpers_path)
 
 if (dir.exists(app_assets_dir)) {

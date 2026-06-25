@@ -523,7 +523,7 @@ plot_pca_per_model <- function(mat_log2 = mat_log2,
       if (identical(comp_name, "ALL_TGvsWT") || identical(cfg$prefix, "ALL_TGvsWT")) {
         out_base_group <- file.path(
           out_dir,
-          paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, "_ellipse_group.png")
+          make_compact_output_filename("PCA", paste0("m", m), comp_name, paste0("s", pca_scaling), "egroup", ext = "png")
         )
         ok1 <- plot_one_pca_subset(
           mat_log2 = mat_log2,
@@ -544,7 +544,7 @@ plot_pca_per_model <- function(mat_log2 = mat_log2,
         if (isTRUE(include_secondary_pca)) {
           out_base_sex <- file.path(
             out_dir,
-            paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, "_ellipse_sex.png")
+            make_compact_output_filename("PCA", paste0("m", m), comp_name, paste0("s", pca_scaling), "esex", ext = "png")
           )
           ok2 <- plot_one_pca_subset(
             mat_log2 = mat_log2,
@@ -570,7 +570,7 @@ plot_pca_per_model <- function(mat_log2 = mat_log2,
           meta = meta_sub,
           out_png = file.path(
             out_dir,
-            paste0("PCA_ACTIVE_model_", m, "_", comp_name, "_scaling_", pca_scaling, ".png")
+            make_compact_output_filename("PCA", paste0("m", m), comp_name, paste0("s", pca_scaling), ext = "png")
           ),
           title_main = title_base,
           pca_scaling = pca_scaling,
@@ -622,7 +622,7 @@ plot_pca_multigroup_per_model <- function(mat_log2,
 
     out_png <- file.path(
       mp$plots$pca_global,
-      paste0("PCA_ACTIVE_model_", m, "_MULTIGROUP_scaling_", pca_scaling, ".png")
+      make_compact_output_filename("PCA", paste0("m", m), "MULTIGROUP", paste0("s", pca_scaling), ext = "png")
     )
     ok <- plot_one_pca_subset(
       mat_log2 = mat_log2,
@@ -694,7 +694,7 @@ plot_global_pca_exports <- function(mat_log2_pre,
     ok_overview <- plot_one_pca_subset(
       mat_log2 = stage_spec$mat,
       meta = metadata_aligned,
-      out_png = file.path(out_dir, paste0(file_prefix, "_", stage_name, "_model_type.png")),
+      out_png = file.path(out_dir, make_compact_output_filename(file_prefix, stage_name, "model_type", ext = "png")),
       title_main = paste0(title_prefix, " ", stage_spec$label, " | color=model | shape=type | ", pca_scaling),
       pca_scaling = pca_scaling,
       color_var = "model",
@@ -715,7 +715,7 @@ plot_global_pca_exports <- function(mat_log2_pre,
       ok_model <- plot_one_pca_subset(
         mat_log2 = stage_spec$mat,
         meta = meta_model,
-        out_png = file.path(out_dir, paste0(file_prefix, "_", stage_name, "_model_", m, "_group_type.png")),
+        out_png = file.path(out_dir, make_compact_output_filename(file_prefix, stage_name, paste0("m", m), "group_type", ext = "png")),
         title_main = paste0(title_prefix, " ", stage_spec$label, " | model=", m, " | color=group | shape=type | ", pca_scaling),
         pca_scaling = pca_scaling,
         color_var = "group",
@@ -866,7 +866,7 @@ plot_pca_pre_post_per_model <- function(mat_log2_pre,
     mp <- get_model_paths(paths, m)
     out_dir <- mp$plots$pca_global
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-    out_png <- file.path(out_dir, paste0("PCA_ACTIVE_model_", m, "_pre_vs_post_", correction_label, "_scaling_", pca_scaling, ".png"))
+    out_png <- file.path(out_dir, make_compact_output_filename("PCA", paste0("m", m), "prepost", correction_label, paste0("s", pca_scaling), ext = "png"))
     out_scores <- file.path(out_dir, paste0("PCA_ACTIVE_model_", m, "_pre_vs_post_", correction_label, "_scores.csv"))
     out_variance <- file.path(out_dir, paste0("PCA_ACTIVE_model_", m, "_pre_vs_post_", correction_label, "_variance.csv"))
 
@@ -966,7 +966,7 @@ plot_qc_loess_audit_pca <- function(assay_num_pre,
   )
 
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-  out_png <- file.path(out_dir, paste0("PCA_QC_pre_vs_post_", correction_label, "_scaling_", pca_scaling, ".png"))
+  out_png <- file.path(out_dir, make_compact_output_filename("PCA_QC", "prepost", correction_label, paste0("s", pca_scaling), ext = "png"))
   out_scores <- file.path(out_dir, paste0("PCA_QC_pre_vs_post_", correction_label, "_scores.csv"))
   out_variance <- file.path(out_dir, paste0("PCA_QC_pre_vs_post_", correction_label, "_variance.csv"))
 
@@ -1145,9 +1145,9 @@ plot_qc_loess_audit_metrics <- function(assay_num_pre,
   ) %>%
     dplyr::mutate(stage = factor(stage, levels = order_pre_post_levels(stage)))
 
-  out_rsd <- file.path(out_dir, paste0("QC_", correction_label, "_audit_RSD_pre_vs_post.png"))
-  out_drift <- file.path(out_dir, paste0("QC_", correction_label, "_audit_injection_order_correlation_pre_vs_post.png"))
-  out_box <- file.path(out_dir, paste0("QC_", correction_label, "_audit_QC_log2_intensity_boxplot_pre_vs_post.png"))
+  out_rsd <- file.path(out_dir, make_compact_output_filename("QC", correction_label, "RSD_prepost", ext = "png"))
+  out_drift <- file.path(out_dir, make_compact_output_filename("QC", correction_label, "drift_prepost", ext = "png"))
+  out_box <- file.path(out_dir, make_compact_output_filename("QC", correction_label, "boxplot_prepost", ext = "png"))
 
   if (isTRUE(export_plots)) ggplot2::ggsave(
     out_rsd,

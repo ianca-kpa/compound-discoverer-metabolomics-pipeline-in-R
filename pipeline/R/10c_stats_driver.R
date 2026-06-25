@@ -149,11 +149,10 @@ run_all_stats_5sets_per_model <- function(mat_log2, mat_raw, metadata_aligned, f
           )
 
         for (style_name in styles_to_export) {
-          base_name <- paste0("volcano_ACTIVE_model_", m, "_", comp_name, "_metric_", met)
           file_name <- if (length(styles_to_export) > 1) {
-            paste0(base_name, "_", style_name, ".png")
+            make_compact_output_filename("VOLC", paste0("m", m), comp_name, met, style_name, ext = "png")
           } else {
-            paste0(base_name, ".png")
+            make_compact_output_filename("VOLC", paste0("m", m), comp_name, met, ext = "png")
           }
 
           out_path <- file.path(out_dir, file_name)

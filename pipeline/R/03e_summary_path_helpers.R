@@ -86,6 +86,30 @@ write_method_summary <- function(path,
   invisible(path)
 }
 
+compact_path_component <- function(value, max_chars = 32L, fallback = "item") {
+  value <- gsub("[^A-Za-z0-9_-]+", "_", as.character(value)[1])
+  value <- gsub("_+", "_", value)
+  value <- gsub("^_+|_+$", "", value)
+  if (!nzchar(value)) value <- fallback
+
+  max_chars <- max(12L, as.integer(max_chars)[1])
+  if (nchar(value) <= max_chars) return(value)
+
+  code_points <- utf8ToInt(value)
+  checksum <- sum((as.numeric(code_points) * seq_along(code_points)) %% 10000019) %% 100000000
+  suffix <- sprintf("_%08d", checksum)
+  paste0(substr(value, 1, max_chars - nchar(suffix)), suffix)
+}
+
+make_compact_output_filename <- function(..., ext, max_chars = 96L, component_chars = 24L) {
+  parts <- unlist(list(...), use.names = FALSE)
+  parts <- parts[!is.na(parts)]
+  parts <- vapply(parts, compact_path_component, character(1), max_chars = component_chars)
+  stem <- paste(parts[nzchar(parts)], collapse = "_")
+  stem <- compact_path_component(stem, max_chars = max_chars, fallback = "output")
+  paste0(stem, ".", gsub("^\\.", "", ext))
+}
+
 # -----------------------------------------------------------------------------
 # Directory helpers
 # -----------------------------------------------------------------------------
@@ -132,9 +156,8 @@ make_one_model_paths <- function(output_dir, model_name) {
   list(
     root = model_root,
     exports = list(
-      root = file.path(model_root, "exports"),
-      metaboanalyst = file.path(model_root, "exports", "metaboanalyst"),
-      stats = file.path(model_root, "exports", "stats")
+      root = model_root,
+      stats = file.path(model_root, "stats")
     ),
     plots = list(
       root = file.path(model_root, "plots"),

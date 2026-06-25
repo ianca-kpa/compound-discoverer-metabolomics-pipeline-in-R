@@ -406,13 +406,10 @@ plot_heatmap_top_ttest_per_model <- function(mat_log2,
 
       out_png <- file.path(
         out_dir,
-        paste0(
-          "HEATMAP_TOP_model_", m, "_",
-          analysis_tag, "_", sex_tag,
-          "_top", n_use,
-          "_rankby_", rank_by,
-          "_scale_", scale_method,
-          ".png"
+        make_compact_output_filename(
+          "HM_TOP", paste0("m", m), analysis_tag, sex_tag,
+          paste0("top", n_use), paste0("rank", rank_by), paste0("s", scale_method),
+          ext = "png"
         )
       )
 

@@ -176,6 +176,40 @@ server <- function(input, output, session) {
     removeModal()
   })
 
+  output_level_summary_ui <- function(level) {
+    level <- normalize_output_level(level, legacy_minimal = FALSE)
+
+    rows <- switch(level,
+      minimal = list(
+        "Pipeline log and output README.",
+        "Per-model stats workbooks when stats export is enabled.",
+        "Primary PCA and volcano plots when volcano export is enabled.",
+        "No heatmaps, MetaboAnalyst exports, intermediate matrices, or debug audits."
+      ),
+      standard = list(
+        "Everything in Minimal.",
+        "Main/top heatmaps when heatmap export is enabled.",
+        "QC and normalization summaries.",
+        "Multi-group summary outputs when multi-group mode is enabled.",
+        "No MetaboAnalyst exports or intermediate/debug matrices."
+      ),
+      full_debug = list(
+        "Everything in Standard.",
+        "All optional plots and exports are enabled for this run.",
+        "MetaboAnalyst CSV files in global/exports_global.",
+        "Intermediate matrices, feature maps, detailed audits, runtime profile, and technical QC/PCA plots.",
+        "Significant-metabolite TXT lists and significant heatmaps."
+      ),
+      list("Unknown output level.")
+    )
+
+    tags$div(
+      class = "small-note",
+      tags$strong("Files summary:"),
+      tags$ul(lapply(rows, tags$li))
+    )
+  }
+
   observeEvent(input[[setting_input_id("output_level")]],
     {
       if (isTRUE(initializing()) || isTRUE(clearing_inputs()) || isTRUE(output_level_modal_active())) {
@@ -204,6 +238,7 @@ server <- function(input, output, session) {
         easyClose = FALSE,
         tags$p(paste0("You selected ", level_label, " output.")),
         tags$p("Standard is recommended for routine runs. Confirm that you want to use this output level?"),
+        output_level_summary_ui(selected_level),
         footer = tagList(
           actionButton("cancel_output_level_change", "Cancel"),
           actionButton("confirm_output_level_change", "Confirm", class = "btn-warning")
@@ -414,21 +449,15 @@ server <- function(input, output, session) {
   }
 
   resolve_input_path <- function(uploaded, external_path, kind) {
-    if (!is.null(uploaded)) {
-      return(file.path("data", basename(uploaded$name)))
+    resolved <- resolve_config_input_path(uploaded, external_path, kind)
+    if (isTRUE(resolved$missing)) {
+      status_message(resolved$message)
     }
+    resolved$path
+  }
 
-    ext <- safe_trimws(external_path)
-    if (nzchar(ext)) {
-      return(ext)
-    }
-
-    status_message(paste(
-      "No",
-      kind,
-      "path was provided. Keep existing config value or provide one."
-    ))
-    NULL
+  persist_injection_order_upload <- function(uploaded = input$injection_order_file) {
+    persist_injection_order_upload_to_data(uploaded, project_root)
   }
 
   save_config_and_inputs <- function(config_text) {
@@ -437,19 +466,11 @@ server <- function(input, output, session) {
     mapping <- metadata_column_mapping()
 
     if (!is.null(input$data_file)) {
-      file.copy(
-        input$data_file$datapath,
-        file.path(project_root, "data", basename(input$data_file$name)),
-        overwrite = TRUE
-      )
+      copy_uploaded_file_to_data(input$data_file, project_root)
     }
 
     if (!is.null(input$metadata_file)) {
-      file.copy(
-        input$metadata_file$datapath,
-        file.path(project_root, "data", basename(input$metadata_file$name)),
-        overwrite = TRUE
-      )
+      copy_uploaded_file_to_data(input$metadata_file, project_root)
       persist_metadata_mapping(
         source_path = input$metadata_file$datapath,
         uploaded_name = input$metadata_file$name,
@@ -468,19 +489,11 @@ server <- function(input, output, session) {
     }
 
     if (!is.null(input$injection_order_file)) {
-      file.copy(
-        input$injection_order_file$datapath,
-        file.path(project_root, "data", "Input Files.xlsx"),
-        overwrite = TRUE
-      )
+      persist_injection_order_upload(input$injection_order_file)
     }
 
     if (!is.null(input$reference_file)) {
-      file.copy(
-        input$reference_file$datapath,
-        file.path(project_root, "data", basename(input$reference_file$name)),
-        overwrite = TRUE
-      )
+      copy_uploaded_file_to_data(input$reference_file, project_root)
     }
 
     clean_config <- normalize_config_text(config_text)
@@ -619,21 +632,21 @@ server <- function(input, output, session) {
     normalize_normalization_mode(mode, default = NULL) %in% c("qc_loess", "qcrsc")
   }
 
-  has_injection_order_file_for_run <- function() {
-    if (!is.null(input$injection_order_file)) {
-      return(TRUE)
+  current_normalization_mode <- function(default = NULL) {
+    mode <- input[[setting_input_id("normalization_mode")]]
+    if (is.null(mode) || !nzchar(safe_trimws(mode))) {
+      mode <- extract_config_value(current_config_text(), "normalization_mode")
     }
 
-    candidate_paths <- unique(c(
-      file.path(project_root, "data", "Input Files.xlsx"),
-      list.files(file.path(project_root, "data"), pattern = "^input_order.*\\.xlsx$", full.names = TRUE, ignore.case = TRUE)
-    ))
-    candidate_paths <- candidate_paths[file.exists(candidate_paths)]
+    normalize_normalization_mode(mode, default = default)
+  }
 
-    any(vapply(candidate_paths, function(path) {
-      input_files_ref <- read_input_files_reference(path)
-      !is.null(input_files_ref) && nrow(input_files_ref) > 0
-    }, logical(1)))
+  has_current_injection_order_upload <- function() {
+    uploaded <- input$injection_order_file
+    !is.null(uploaded) &&
+      !is.null(uploaded$datapath) &&
+      nzchar(safe_trimws(uploaded$datapath)) &&
+      file.exists(uploaded$datapath)
   }
 
   normalized_output_dir <- function() {
@@ -644,6 +657,41 @@ server <- function(input, output, session) {
     out
   }
 
+  run_readiness <- reactive({
+    missing <- character(0)
+
+    data_path <- resolve_input_file("data")
+    metadata_path <- resolve_input_file("metadata")
+    reference_path <- if (isTRUE(input$use_reference_file)) {
+      resolve_input_file("reference")
+    } else {
+      NULL
+    }
+    allowed_groups <- parse_allowed_groups(input$allowed_metadata_groups)
+    mode <- current_normalization_mode(default = NULL)
+
+    if (!is_valid_file_path(data_path)) {
+      missing <- c(missing, "data file")
+    }
+    if (!is_valid_file_path(metadata_path)) {
+      missing <- c(missing, "metadata file")
+    }
+    if (length(allowed_groups) < 2) {
+      missing <- c(missing, "at least two allowed groups")
+    }
+    if (isTRUE(input$use_reference_file) && !is_valid_file_path(reference_path)) {
+      missing <- c(missing, "reference file")
+    }
+    if (mode %in% c("qc_loess", "qcrsc") && !isTRUE(has_current_injection_order_upload())) {
+      missing <- c(missing, "injection order file")
+    }
+    if (!nzchar(safe_trimws(input$output_dir))) {
+      missing <- c(missing, "output directory")
+    }
+
+    list(ok = length(missing) == 0 && !isTRUE(process_state$running), missing = missing)
+  })
+
   build_expected_output_manifest <- function(output_level = output_level_enabled()) {
     out_dir <- normalized_output_dir()
     cfg <- build_quick_config(current_config_text())
@@ -651,86 +699,8 @@ server <- function(input, output, session) {
   }
 
   launch_pipeline <- function() {
-    rscript_cmd <- file.path(R.home("bin"), "Rscript")
-    if (.Platform$OS.type == "windows") {
-      rscript_cmd <- paste0(rscript_cmd, ".exe")
-    }
-
-    if (!file.exists(rscript_cmd)) {
-      status_message("R script executable not found. Cannot run pipeline from UI.")
-      return()
-    }
-
-    log_file <- tempfile(pattern = "pipeline_run_", fileext = ".log")
     output_log_file <- file.path(resolve_output_dir_abs(), "PIPELINE_LOG.txt")
-    pipeline_log_text(paste0(
-      "Starting pipeline at ",
-      format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-      "...\nWaiting for Rscript output."
-    ))
-
-    if (requireNamespace("processx", quietly = TRUE)) {
-      proc <- tryCatch(
-        processx::process$new(
-          command = rscript_cmd,
-          args = c("pipeline/run_pipeline.R"),
-          wd = project_root,
-          stdout = log_file,
-          stderr = log_file,
-          cleanup = TRUE
-        ),
-        error = function(e) e
-      )
-
-      if (inherits(proc, "error")) {
-        status_message(paste("Failed to start pipeline:", conditionMessage(proc)))
-        return()
-      }
-
-      process_state$proc <- proc
-      process_state$log_file <- log_file
-      process_state$pipeline_log_file <- output_log_file
-      process_state$running <- TRUE
-      process_state$started_at <- Sys.time()
-      process_state$pid <- tryCatch(proc$get_pid(), error = function(e) NULL)
-      status_message("Pipeline is running in background. Open 'Pipeline Log' tab for live output.")
-    } else {
-      status_message("Package 'processx' not installed. Running pipeline synchronously without live streaming.")
-
-      exit_code <- tryCatch(
-        system2(
-          rscript_cmd,
-          args = c("pipeline/run_pipeline.R"),
-          stdout = log_file,
-          stderr = log_file,
-          wait = TRUE
-        ),
-        error = function(e) {
-          writeLines(paste("Pipeline execution failed:", conditionMessage(e)), log_file)
-          1L
-        }
-      )
-
-      if (file.exists(output_log_file)) {
-        pipeline_log_text(read_log_preview(output_log_file))
-      } else if (file.exists(log_file)) {
-        pipeline_log_text(read_log_preview(log_file))
-      } else {
-        pipeline_log_text("No log file generated.")
-      }
-
-      if (isTRUE(as.integer(exit_code) == 0L)) {
-        status_message("Pipeline run completed successfully.")
-      } else {
-        status_message(
-          paste(
-            "Pipeline run failed with exit code",
-            as.integer(exit_code),
-            ". Check Pipeline Log tab."
-          )
-        )
-      }
-    }
+    launch_pipeline_process(project_root, output_log_file, status_message, pipeline_log_text, process_state)
   }
 
   run_pipeline_now <- function(cfg_to_run) {
@@ -740,19 +710,7 @@ server <- function(input, output, session) {
   }
 
   stop_pipeline_now <- function() {
-    if (!isTRUE(process_state$running) || is.null(process_state$proc)) {
-      status_message("No running pipeline process to stop.")
-      return()
-    }
-
-    if (process_state$proc$is_alive()) {
-      process_state$proc$kill()
-      status_message("Pipeline process stopped by user.")
-    } else {
-      status_message("Pipeline process is not running.")
-    }
-
-    process_state$running <- FALSE
+    stop_pipeline_process(process_state, status_message)
   }
 
   clear_all_inputs <- function() {
@@ -815,16 +773,7 @@ server <- function(input, output, session) {
   }
 
   resolve_output_dir_abs <- function() {
-    out <- strip_outer_quotes(input$output_dir)
-    if (!nzchar(out)) {
-      out <- "output"
-    }
-
-    if (is_absolute_path(out)) {
-      return(normalizePath(out, winslash = "/", mustWork = FALSE))
-    }
-
-    normalizePath(file.path(project_root, out), winslash = "/", mustWork = FALSE)
+    resolve_output_dir_abs_value(input$output_dir, project_root)
   }
 
   # Resolve uploaded, external, mapped, or config-backed input paths in priority order.
@@ -855,21 +804,6 @@ server <- function(input, output, session) {
 
     clear_ts <- inputs_cleared_timestamp()
 
-    # Ignore stale uploaded temp files from before the latest Clear/reset.
-    is_valid_current_file <- function(file_path) {
-      if (is.null(file_path) || !file.exists(file_path)) {
-        return(FALSE)
-      }
-
-      file_mtime <- file.mtime(file_path)
-
-      if (!is.null(clear_ts)) {
-        return(file_mtime >= (clear_ts - 1))
-      }
-
-      file_mtime >= (session_started_at - 2)
-    }
-
     if (identical(kind, "metadata") && isTRUE(prefer_mapped)) {
       mapping <- metadata_column_mapping()
 
@@ -883,7 +817,7 @@ server <- function(input, output, session) {
 
       if (!is.null(uploaded) &&
         !is.null(uploaded$datapath) &&
-        is_valid_current_file(uploaded$datapath)) {
+        is_current_file_path(uploaded$datapath, clear_ts, session_started_at)) {
         source_hint <- uploaded$datapath
       } else if (nzchar(external)) {
         source_hint <- external
@@ -908,7 +842,7 @@ server <- function(input, output, session) {
 
     if (!is.null(uploaded) &&
       !is.null(uploaded$datapath) &&
-      is_valid_current_file(uploaded$datapath)) {
+      is_current_file_path(uploaded$datapath, clear_ts, session_started_at)) {
       return(uploaded$datapath)
     }
 
@@ -935,7 +869,11 @@ server <- function(input, output, session) {
     NULL
   }
 
-  get_result_image_files <- function() {
+  result_gallery_filter <- function() {
+    normalize_result_gallery_filter(input$result_gallery_filter)
+  }
+
+  get_result_image_files <- function(filter = result_gallery_filter()) {
     out_dir <- resolve_output_dir_abs()
 
     if (!dir.exists(out_dir)) {
@@ -977,6 +915,14 @@ server <- function(input, output, session) {
     keep_current <- mtime >= min_time
     files <- files[keep_current]
     mtime <- mtime[keep_current]
+
+    if (length(files) == 0) {
+      return(character(0))
+    }
+
+    filtered <- filter_result_image_files(files, mtime, out_dir, filter)
+    files <- filtered$files
+    mtime <- filtered$mtime
 
     if (length(files) == 0) {
       return(character(0))
@@ -1046,9 +992,8 @@ server <- function(input, output, session) {
   observeEvent(input$save_settings_form, {
     cfg <- build_settings_builder_config(current_config_text())
     clean_config <- normalize_config_text(cfg)
-    writeLines(clean_config, active_config_path, useBytes = TRUE)
-    updateTextAreaInput(session, "config_text", value = clean_config)
-    status_message("Settings saved from the form to config/settings.R.")
+    save_config_and_inputs(clean_config)
+    status_message("Settings saved from the form to config/settings.R and uploaded files copied to data/.")
   })
 
   observeEvent(input$data_file,
@@ -1064,6 +1009,24 @@ server <- function(input, output, session) {
       status_message(paste(
         "Output directory suggested from the data file; you can edit it before running:",
         suggested_output
+      ))
+    },
+    ignoreInit = TRUE
+  )
+
+  observeEvent(input$injection_order_file,
+    {
+      if (is.null(input$injection_order_file) ||
+          is.null(input$injection_order_file$name) ||
+          !nzchar(input$injection_order_file$name)) {
+        return()
+      }
+
+      persist_injection_order_upload(input$injection_order_file)
+      status_message(paste0(
+        "Injection order file copied to data/Input Files.xlsx and data/",
+        basename(input$injection_order_file$name),
+        "."
       ))
     },
     ignoreInit = TRUE
@@ -1479,7 +1442,7 @@ server <- function(input, output, session) {
     }
 
     cfg_to_run <- build_quick_config(current_config_text())
-    if (isTRUE(normalization_requires_injection_order(cfg_to_run)) && !isTRUE(has_injection_order_file_for_run())) {
+    if (isTRUE(normalization_requires_injection_order(cfg_to_run)) && !isTRUE(has_current_injection_order_upload())) {
       msg <- paste(
         "Injection order file is required for normalization_mode = qcrsc or qc_loess.",
         "Please upload the Injection order file before running the pipeline."
@@ -1511,6 +1474,7 @@ server <- function(input, output, session) {
             tags$li("MULTIGROUP_GLOBAL is exploratory: no directional FC, Up/Down classification, or volcano plot.")
           }
         ),
+        output_level_summary_ui(output_level_enabled()),
         checkboxInput("skip_run_confirm", "Do not ask again in this session", value = FALSE),
         footer = tagList(
           actionButton("cancel_run_confirm", "Cancel"),
@@ -1536,7 +1500,7 @@ server <- function(input, output, session) {
         cfg_to_run <- build_quick_config(current_config_text())
       }
 
-      if (isTRUE(normalization_requires_injection_order(cfg_to_run)) && !isTRUE(has_injection_order_file_for_run())) {
+      if (isTRUE(normalization_requires_injection_order(cfg_to_run)) && !isTRUE(has_current_injection_order_upload())) {
         msg <- paste(
           "Injection order file is required for normalization_mode = qcrsc or qc_loess.",
           "Please upload the Injection order file before running the pipeline."
@@ -1746,6 +1710,38 @@ server <- function(input, output, session) {
     session$sendCustomMessage("scrollPipelineLog", list())
   })
 
+  observe({
+    readiness <- run_readiness()
+    if (isTRUE(readiness$ok)) {
+      shinyjs::enable("run_pipeline")
+    } else {
+      shinyjs::disable("run_pipeline")
+    }
+  })
+
+  output$run_readiness_hint <- renderUI({
+    readiness <- run_readiness()
+
+    if (isTRUE(process_state$running)) {
+      return(tags$p(
+        class = "run-readiness-hint run-readiness-hint-running",
+        "Pipeline is already running."
+      ))
+    }
+
+    if (isTRUE(readiness$ok)) {
+      return(tags$p(
+        class = "run-readiness-hint run-readiness-hint-ok",
+        "Ready to run."
+      ))
+    }
+
+    tags$p(
+      class = "run-readiness-hint run-readiness-hint-missing",
+      paste("Run disabled until these items are ready:", paste(readiness$missing, collapse = ", "), ".")
+    )
+  })
+
   output$top_status_banner <- renderUI({
     tags$div(
       style = "margin-bottom:10px; padding:10px; border-radius:8px; background:#ecfeff; border:1px solid #99f6e4; color:#134e4a; display:flex; align-items:center; justify-content:space-between; gap:10px;",
@@ -1820,17 +1816,6 @@ server <- function(input, output, session) {
         "Install package 'shinyFiles' to enable output folder browsing."
       )
     }
-  })
-
-  output$output_dir_status <- renderText({
-    out <- sanitize_output_dir_path(input$output_dir)
-    abs_path <- if (is_absolute_path(out)) {
-      normalizePath(out, winslash = "/", mustWork = FALSE)
-    } else {
-      normalizePath(file.path(project_root, out), winslash = "/", mustWork = FALSE)
-    }
-
-    paste("Output will be saved to:", abs_path)
   })
 
   output$data_overview <- renderUI({
@@ -2027,80 +2012,20 @@ server <- function(input, output, session) {
       list(ok = TRUE, disabled = TRUE)
     }
 
-    tags$div(
-      style = "border: 1px solid #dbe4ef; border-radius: 10px; padding: 12px; background: #fff;",
-      tags$h5("Data matrix"),
-      if (isTRUE(data_info$ok)) {
-        tags$ul(
-          tags$li(paste("File:", data_info$path)),
-          tags$li(paste("Rows:", data_info$n_rows)),
-          tags$li(paste("Columns:", data_info$n_cols)),
-          tags$li(paste("Area columns:", data_info$n_area_cols))
-        )
-      } else {
-        tags$p(style = "color:#b91c1c;", paste("Data summary unavailable:", data_info$msg))
-      },
-      tags$h5("Metadata"),
-      if (isTRUE(md_info$ok)) {
-        tags$ul(
-          tags$li(paste("File:", md_info$path)),
-          tags$li(paste("Rows:", md_info$n_rows)),
-          tags$li(paste("Samples:", ifelse(is.na(md_info$n_samples), "N/A", md_info$n_samples))),
-          tags$li(paste(
-            "Models:",
-            if (length(md_info$models) == 0) "N/A" else paste(md_info$models, collapse = ", ")
-          )),
-          tags$li(paste(
-            "Groups:",
-            if (length(md_info$groups) == 0) "N/A" else paste(md_info$groups, collapse = ", ")
-          )),
-          tags$li(paste(
-            "Allowed groups (current setting):",
-            if (length(allowed_groups) == 0) "N/A" else paste(allowed_groups, collapse = ", ")
-          )),
-          tags$li(paste(
-            "Sex counts:",
-            if (is.null(md_info$sexes)) {
-              "N/A"
-            } else {
-              paste(names(md_info$sexes), md_info$sexes, collapse = " | ")
-            }
-          )),
-          if (length(md_info$invalid_groups) > 0) {
-            tags$li(
-              style = "color:#b91c1c; font-weight:600;",
-              paste(
-                "Invalid group values found:",
-                paste(md_info$invalid_groups, collapse = ", "),
-                "- please review metadata file."
-              )
-            )
-          }
-        )
-      } else {
-        tags$p(style = "color:#b91c1c;", paste("Metadata summary unavailable:", md_info$msg))
-      },
-      tags$h5("Reference"),
-      if (isTRUE(comp_info$ok) && isTRUE(comp_info$disabled)) {
-        tags$p(
-          class = "small-note",
-          "Reference file is disabled in Inputs. Reference summary is not required for this run."
-        )
-      } else if (isTRUE(comp_info$ok)) {
-        tags$ul(
-          tags$li(paste("File:", comp_info$path)),
-          tags$li(paste("Rows:", comp_info$n_rows)),
-          tags$li(paste("Columns:", comp_info$n_cols))
-        )
-      } else {
-        if (identical(comp_info$msg, "No reference file selected.")) {
-          tags$div(
-            style = "color:#b91c1c;", paste("Reference file not selected. Please upload a reference file in the Inputs panel.")
-          )
-        } else {
-          tags$p(style = "color:#b91c1c;", paste("Reference summary unavailable:", comp_info$msg))
-        }
-      }
+    preflight_normalization_mode <- current_normalization_mode(default = NULL)
+    requires_injection_order <- preflight_normalization_mode %in% c("qc_loess", "qcrsc")
+    injection_order_ok <- !isTRUE(requires_injection_order) || isTRUE(has_current_injection_order_upload())
+    output_dir_abs <- resolve_output_dir_abs()
+
+    build_data_overview_ui(
+      data_info = data_info,
+      md_info = md_info,
+      comp_info = comp_info,
+      allowed_groups = allowed_groups,
+      use_reference_file = isTRUE(input$use_reference_file),
+      requires_injection_order = requires_injection_order,
+      injection_order_ok = injection_order_ok,
+      output_dir_abs = output_dir_abs
     )
   })
 
@@ -2144,6 +2069,7 @@ server <- function(input, output, session) {
 
     out_dir <- resolve_output_dir_abs()
     img_files <- get_result_image_files()
+    total_img_files <- get_result_image_files(filter = "all")
     summary_path <- file.path(out_dir, "global", "audits_global", "qc_pca_comparison_summary.csv")
     clear_ts <- inputs_cleared_timestamp()
     min_time <- if (!is.null(clear_ts)) clear_ts - 1 else session_started_at - 2
@@ -2170,7 +2096,7 @@ server <- function(input, output, session) {
       ),
       tags$div(
         tags$strong("Figures"),
-        tags$span(as.character(length(img_files)))
+        tags$span(paste0(length(img_files), " shown / ", length(total_img_files), " total"))
       ),
       tags$div(
         tags$strong("QC/PCA table"),
@@ -2195,11 +2121,18 @@ server <- function(input, output, session) {
     img_files <- get_result_image_files()
 
     if (length(img_files) == 0) {
+      if (length(get_result_image_files(filter = "all")) > 0) {
+        return(tags$p("No result images match the selected figure filter."))
+      }
+
       return(tags$p("No result images found yet. Run the pipeline to generate figures."))
     }
 
     current <- selected_result_image()
-    if (!is_valid_image_path(current)) {
+    current_in_filter <- is_valid_image_path(current) &&
+      normalizePath(current, winslash = "/", mustWork = FALSE) %in%
+        normalizePath(img_files, winslash = "/", mustWork = FALSE)
+    if (!isTRUE(current_in_filter)) {
       selected_result_image(img_files[1])
     }
 
@@ -2367,6 +2300,10 @@ server <- function(input, output, session) {
     }
 
     safe_read_file(script_paths[idx[1]])
+  })
+
+  output$pipeline_log_summary <- renderUI({
+    build_pipeline_log_summary_ui(pipeline_log_text())
   })
 
   output$pipeline_log <- renderText({

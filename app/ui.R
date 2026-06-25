@@ -78,12 +78,20 @@ ui <- fluidPage(
             )
           )
         ),
+        uiOutput("allowed_metadata_groups_ui"),
         checkboxInput(
           "manual_metadata_cols",
           "Manually map metadata columns and configure groups",
           value = FALSE
         ),
-        uiOutput("allowed_metadata_groups_ui"),
+        conditionalPanel(
+          condition = "input.manual_metadata_cols != true",
+          tags$div(
+            class = "metadata-mapping-alert",
+            tags$strong("Model-specific groups need this option."),
+            tags$span("Turn it on to detect/configure groups within each model before running the pipeline.")
+          )
+        ),
         uiOutput("allowed_metadata_groups_hint"),
         tags$hr(),
         conditionalPanel(
@@ -110,6 +118,7 @@ ui <- fluidPage(
             actionButton("apply_metadata_cols", "Apply metadata/group settings")
           )
         ),
+        tags$hr(),
         checkboxInput(
           "use_weight_normalization",
           "Weight normalization",
@@ -175,8 +184,7 @@ ui <- fluidPage(
                 width = "100%"
               )
             )
-          ),
-          textOutput("output_dir_status")
+          )
         )
       ),
       
@@ -188,6 +196,7 @@ ui <- fluidPage(
           column(6, actionButton("stop_pipeline", "Stop pipeline", icon = icon("stop"), style = "background-color: #dc3545; color: white;")),
           column(6, actionButton("run_pipeline", "Run pipeline", icon = icon("play")))
         ),
+        uiOutput("run_readiness_hint"),
         tags$hr(),
         tabsetPanel(
           id = "main_tabs",
@@ -226,6 +235,7 @@ ui <- fluidPage(
           tabPanel(
             "Pipeline Log",
             tags$p("Run pipeline from UI and inspect the latest execution log."),
+            uiOutput("pipeline_log_summary"),
             tags$pre(
               id = "pipeline_log_box",
               style = "max-height: 850px; overflow-y: auto; background: #111; color: #f2f2f2; padding: 12px;",
@@ -238,7 +248,24 @@ ui <- fluidPage(
               style = "display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;",
               h4(style = "margin:0;", "Results Gallery"),
               tags$div(
-                style = "display:flex; align-items:center; gap:8px;",
+                style = "display:flex; align-items:center; gap:8px; flex-wrap:wrap;",
+                tags$div(
+                  class = "results-filter-control",
+                  selectInput(
+                    "result_gallery_filter",
+                    label = NULL,
+                    choices = c(
+                      "All figures" = "all",
+                      "PCA" = "pca",
+                      "Volcano" = "volcano",
+                      "Heatmap" = "heatmap",
+                      "QC / Normalization" = "qc_norm",
+                      "Other" = "other"
+                    ),
+                    selected = "all",
+                    width = "180px"
+                  )
+                ),
                 actionButton(style = "background-color: #007bff; color: white; ", "refresh_results_gallery", "Refresh", icon = icon("refresh")),
                 actionButton("open_output_dir_gallery", "Open output folder", icon = icon("folder-open"))
               )
