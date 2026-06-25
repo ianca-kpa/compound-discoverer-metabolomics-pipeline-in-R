@@ -302,8 +302,8 @@ The `scripts/` folder contains optional helpers around the main pipeline:
 
 ```powershell
 Rscript scripts/diagnose_sample.R PCA_OUTLIERS data/MA_ACTIVE_duplicate_ONLY_GLOBAL_NO_QC.csv
-Rscript scripts/diagnose_sample.R H3 output/<run>/global/exports_global/MA_ACTIVE_duplicate_ONLY_GLOBAL_NO_QC.csv path/to/metadata.xlsx output/diagnostics_h3_metadata
-Rscript scripts/generate_sample_report.R output/diagnostics_pca_outliers H3
+Rscript scripts/diagnose_sample.R SAMPLE_ID output/<run>/global/exports_global/MA_ACTIVE_duplicate_ONLY_GLOBAL_NO_QC.csv path/to/metadata.xlsx output/diagnostics_SAMPLE_ID_metadata
+Rscript scripts/generate_sample_report.R output/diagnostics_pca_outliers SAMPLE_ID
 Rscript scripts/generate_qc_loess_weight_plot.R output/<run>/global/exports_global output/<run>/global/plots_global/normalization
 ```
 

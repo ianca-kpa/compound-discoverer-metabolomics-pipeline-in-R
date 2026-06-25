@@ -1,0 +1,107 @@
+---
+title: "Sample diagnostic report"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+params:
+  diagnostics_dir: "output/diagnostics_pca_outliers"
+  sample: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+diagnostics_dir <- params$diagnostics_dir
+sample_filter <- params$sample
+
+read_optional_csv <- function(path) {
+  if (!file.exists(path)) return(NULL)
+  read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+}
+
+safe_file_part <- function(x) {
+  gsub("[^A-Za-z0-9_.-]+", "_", as.character(x))
+}
+
+summary_path <- file.path(diagnostics_dir, "diagnose_samples_summary.csv")
+summary_tbl <- read_optional_csv(summary_path)
+
+if (!is.null(summary_tbl) && nzchar(sample_filter) && "sample" %in% names(summary_tbl)) {
+  summary_tbl <- summary_tbl[toupper(summary_tbl$sample) == toupper(sample_filter), , drop = FALSE]
+}
+
+pca_tbl <- read_optional_csv(file.path(diagnostics_dir, "pca_outlier_candidates.csv"))
+totals_tbl <- read_optional_csv(file.path(diagnostics_dir, "sample_totals_missing_frac.csv"))
+```
+
+```{r validate}
+if (!dir.exists(diagnostics_dir)) {
+  stop("Diagnostics directory not found: ", diagnostics_dir)
+}
+```
+
+## Diagnostics Directory
+
+`r diagnostics_dir`
+
+```{r summary}
+if (is.null(summary_tbl) || nrow(summary_tbl) == 0) {
+  cat("No diagnose_samples_summary.csv rows available for this report.")
+} else {
+  knitr::kable(summary_tbl)
+}
+```
+
+## PCA Outlier Scores
+
+```{r pca}
+if (is.null(pca_tbl) || nrow(pca_tbl) == 0) {
+  cat("No pca_outlier_candidates.csv file was found.")
+} else {
+  display_cols <- intersect(
+    c("sample", "PC1", "PC2", "pca_robust_distance", "is_pca_outlier"),
+    names(pca_tbl)
+  )
+  knitr::kable(head(pca_tbl[, display_cols, drop = FALSE], 25))
+}
+```
+
+## Sample Totals
+
+```{r totals}
+if (is.null(totals_tbl) || nrow(totals_tbl) == 0) {
+  cat("No sample_totals_missing_frac.csv file was found.")
+} else {
+  totals_tbl <- totals_tbl[order(totals_tbl$missing_frac, decreasing = TRUE), , drop = FALSE]
+  knitr::kable(head(totals_tbl, 25))
+}
+```
+
+## Top Features
+
+```{r top-features}
+samples_to_show <- character(0)
+if (!is.null(summary_tbl) && "sample" %in% names(summary_tbl)) {
+  samples_to_show <- summary_tbl$sample
+}
+if (length(samples_to_show) == 0 && nzchar(sample_filter)) {
+  samples_to_show <- sample_filter
+}
+
+if (length(samples_to_show) == 0) {
+  cat("No selected sample was available for top-feature tables.")
+} else {
+  for (sample_name in samples_to_show) {
+    top_path <- file.path(diagnostics_dir, paste0("top_features_", safe_file_part(sample_name), ".csv"))
+    top_tbl <- read_optional_csv(top_path)
+    cat("\n\n### ", sample_name, "\n\n", sep = "")
+    if (is.null(top_tbl) || nrow(top_tbl) == 0) {
+      cat("No top-feature table found for this sample.")
+    } else {
+      knitr::kable(head(top_tbl, 25))
+    }
+  }
+}
+```
+
