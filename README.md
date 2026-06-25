@@ -127,7 +127,7 @@ For MetaboAnalyst-style comparisons, the most relevant settings are:
 - `low_variance_filter_method <- "iqr"`;
 - `low_variance_filter_rounding <- "ceiling"`;
 - `pca_scaling <- "pareto"`;
-- `heatmap_scale_method <- "pareto"`;
+- `heatmap_scale_method <- "zscore"`;
 - `export_metaboanalyst_ready <- TRUE`.
 
 ### Multi-group analysis
