@@ -202,7 +202,7 @@ settings_form_sections <- list(
       list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1),
       list(key = "make_heatmap_by_model", label = "Heatmap by model", type = "logical_select", default = TRUE),
       list(key = "make_heatmap_by_model_sex", label = "Heatmap by model and sex", type = "logical_select", default = TRUE),
-      list(key = "heatmap_scale_method", label = "Heatmap scale method", type = "select", choices = c("none", "zscore", "pareto"), default = "pareto")
+      list(key = "heatmap_scale_method", label = "Heatmap scale method", type = "select", choices = c("none", "zscore", "pareto"), default = "zscore")
     )
   ),
   list(

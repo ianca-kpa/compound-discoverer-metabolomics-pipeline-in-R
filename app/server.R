@@ -513,7 +513,7 @@ server <- function(input, output, session) {
     }
     heatmap_scale_quick <- safe_trimws(input[[setting_input_id("heatmap_scale_method")]])
     if (!nzchar(heatmap_scale_quick)) {
-      heatmap_scale_quick <- "pareto"
+      heatmap_scale_quick <- "zscore"
     }
     normalization_mode_quick <- normalize_normalization_mode(normalization_mode_quick)
     weight_normalization_effective <- isTRUE(input$use_weight_normalization)
