@@ -2,35 +2,11 @@
 
 # Compute project/pipeline paths early so we can ensure packages are
 # installed before attempting to load libraries used by the app.
-locate_project_root <- function(start_path = getwd()) {
-  current_path <- normalizePath(start_path, winslash = "/", mustWork = FALSE)
-
-  repeat {
-    has_pipeline <- dir.exists(file.path(current_path, "pipeline", "R"))
-    has_app <- dir.exists(file.path(current_path, "app"))
-    has_app_entry <- file.exists(file.path(current_path, "app.R"))
-
-    if (has_pipeline && has_app && has_app_entry) {
-      return(normalizePath(current_path, winslash = "/", mustWork = TRUE))
-    }
-
-    parent_path <- normalizePath(file.path(current_path, ".."), winslash = "/", mustWork = FALSE)
-    if (identical(parent_path, current_path)) {
-      stop(
-        "Could not locate the project root. Open the repository root or make sure app.R, app/, and pipeline/R/ exist."
-      )
-    }
-
-    current_path <- parent_path
-  }
-}
-
-project_root <- locate_project_root(getwd())
+project_root <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 pipeline_root <- file.path(project_root, "pipeline")
 r_dir <- file.path(pipeline_root, "R")
 config_dir <- file.path(pipeline_root, "config")
 app_assets_dir <- file.path(project_root, "app", "assets")
-data_dir <- file.path(project_root, "data")
 
 # Attempt to run the pipeline package installer script if present. This
 # installs CRAN and Bioconductor packages (e.g. limma) so the Shiny app can
@@ -50,6 +26,18 @@ library(bslib)
 helpers_path <- file.path(pipeline_root, "R", "03_helpers_io_log.R")
 if (file.exists(helpers_path)) source(helpers_path)
 active_config_path <- file.path(config_dir, "settings.R")
+
+app_helpers_path <- file.path(project_root, "app", "helpers.R")
+if (file.exists(app_helpers_path)) source(app_helpers_path)
+
+server_util_helpers_path <- file.path(project_root, "app", "server_util_helpers.R")
+if (file.exists(server_util_helpers_path)) source(server_util_helpers_path)
+
+server_settings_helpers_path <- file.path(project_root, "app", "server_settings_helpers.R")
+if (file.exists(server_settings_helpers_path)) source(server_settings_helpers_path)
+
+metadata_helpers_path <- file.path(project_root, "app", "metadata_helpers.R")
+if (file.exists(metadata_helpers_path)) source(metadata_helpers_path)
 
 if (dir.exists(app_assets_dir)) {
   addResourcePath("assets", app_assets_dir)
@@ -104,21 +92,6 @@ get_pipeline_required_packages <- function(packages_file = file.path(r_dir, "00_
 
 required_packages <- get_pipeline_required_packages()
 
-available_injection_order_files <- function() {
-  if (!dir.exists(data_dir)) {
-    return(character(0))
-  }
-
-  paths <- list.files(
-    data_dir,
-    pattern = "^input[_ -]?order.*\\.(csv|tsv|txt|xlsx|xls)$",
-    full.names = FALSE,
-    ignore.case = TRUE
-  )
-
-  file.path("data", sort(paths))
-}
-
 script_paths <- c(file.path(pipeline_root, "run_pipeline.R"), sort(list.files(
   r_dir,
   pattern = "\\.R$", full.names = TRUE
@@ -130,278 +103,153 @@ script_names <- vapply(script_paths, function(p) {
   ), "", gsub("\\\\", "/", p)))
 }, character(1))
 
-safe_read_file <- function(path) {
-  if (!file.exists(path)) {
-    return(paste("File not found:", path))
-  }
-  paste(readLines(path, warn = FALSE), collapse = "\n")
-}
-
-extract_config_value <- function(config_text, key) {
-  pattern <- paste0("^\\s*", key, "\\s*<-\\s*(.+)$")
-  lines <- strsplit(config_text, "\\n", fixed = FALSE)[[1]]
-  hit <- grep(pattern, lines, perl = TRUE, value = TRUE)
-
-  if (length(hit) == 0) {
-    return(NULL)
-  }
-
-  raw <- sub(pattern, "\\1", hit[length(hit)], perl = TRUE)
-  raw <- sub("\\s*#.*$", "", trimws(raw))
-
-  if (grepl("^\".*\"$|^'.*'$", raw)) {
-    return(gsub("^\"|\"$|^'|'$", "", raw))
-  }
-
-  raw
-}
-
-replace_or_append_config_line <- function(config_text, key, value_expr) {
-  pattern <- paste0("^\\s*", key, "\\s*<-")
-  replacement <- paste0(key, " <- ", value_expr)
-  lines <- strsplit(config_text, "\\n", fixed = FALSE)[[1]]
-  idx <- grep(pattern, lines)
-
-  if (length(idx) > 0) {
-    lines[idx[1]] <- replacement
-  } else {
-    lines <- c(lines, replacement)
-  }
-
-  paste(lines, collapse = "\n")
-}
-
-is_absolute_path <- function(path) {
-  grepl("^[A-Za-z]:[/\\]|^/|^~", path)
-}
-
-# Use shared implementations from pipeline/R/03_helpers_io_log.R when available
-# (get_comparison_group_labels_for_model / map_comparison_group_display_values)
-
-validate_metadata_columns <- function(path,
-                                      metadata_mapping = NULL,
-                                      allowed_groups = c("WT", "TG"),
-                                      model_allowed_groups_by_model = NULL) {
-  alias_map <- list(
-    sample = c("sample", "sample_id", "sample_name", "id_sample", "id", "name"),
-    weight = c("weight", "weight_mg", "mass", "mass_mg", "mg", "sample_weight", "sample_mass", "weight_g", "mass_g", "sample_weight_g", "sample_mass_g"),
-    group = c("group", "treatment", "treat"),
-    sex = c("sex", "gender"),
-    model = c("model", "disease", "condition", "phenotype", "status")
-  )
-
-  md <- safe_read_table(path)
-  actual <- tolower(trimws(as.character(names(md))))
-
-  missing <- character(0)
-  resolved_cols <- list()
-
-  for (target in names(alias_map)) {
-    mapped_col <- ""
-    if (!is.null(metadata_mapping) && !is.null(metadata_mapping[[target]])) {
-      mapped_col <- normalize_name(metadata_mapping[[target]])
-    }
-
-    if (nzchar(mapped_col)) {
-      if (!(mapped_col %in% actual)) {
-        missing <- c(missing, target)
-      } else {
-        resolved_cols[[target]] <- mapped_col
-      }
-    } else {
-      aliases <- normalize_name(alias_map[[target]])
-      found <- intersect(aliases, actual)
-      if (length(found) == 0) {
-        missing <- c(missing, target)
-      } else {
-        resolved_cols[[target]] <- found[1]
-      }
-    }
-  }
-
-  if (length(missing) > 0) {
-    return(list(
-      ok = FALSE,
-      message = paste(
-        "Metadata missing required columns or mappings:",
-        paste(missing, collapse = ", ")
-      )
-    ))
-  }
-
-  allowed_groups <- unique(trimws(as.character(allowed_groups)))
-  allowed_groups <- allowed_groups[nzchar(allowed_groups)]
-  model_group_values <- character(0)
-
-  if (length(allowed_groups) < 2 && !is.null(model_allowed_groups_by_model) && length(model_allowed_groups_by_model) > 0) {
-    inferred_groups <- unique(trimws(unlist(strsplit(as.character(model_allowed_groups_by_model), ",", fixed = TRUE), use.names = FALSE)))
-    inferred_groups <- inferred_groups[nzchar(inferred_groups)]
-    if (length(inferred_groups) >= 2) {
-      allowed_groups <- inferred_groups
-    }
-  }
-
-  if (!is.null(model_allowed_groups_by_model) && length(model_allowed_groups_by_model) > 0) {
-    model_group_values <- unique(trimws(unlist(
-      strsplit(as.character(model_allowed_groups_by_model), ",", fixed = TRUE),
-      use.names = FALSE
-    )))
-    model_group_values <- model_group_values[nzchar(model_group_values)]
-  }
-
-  valid_group_values <- unique(c(allowed_groups, model_group_values))
-  allowed_groups_norm <- toupper(valid_group_values)
-  if (length(allowed_groups) < 2) {
-    return(list(
-      ok = FALSE,
-      message = "Please provide at least two allowed group values in this order: control, test (e.g. WT, TG), or define them in model_allowed_groups_by_model."
-    ))
-  }
-
-  group_col <- resolved_cols[["group"]]
-  if (!is.null(group_col) && nzchar(group_col)) {
-    col_idx <- which(actual == group_col)
-    if (length(col_idx) == 0) {
-      return(list(ok = FALSE, message = paste0("Group column '", group_col, "' not found in metadata.")))
-    }
-    groups_raw <- as.character(md[[col_idx[1]]])
-    groups_raw <- trimws(groups_raw)
-
-    if (!is.null(model_allowed_groups_by_model) && length(model_allowed_groups_by_model) > 0 && "model" %in% names(resolved_cols)) {
-      model_idx <- which(actual == resolved_cols[["model"]])
-      if (length(model_idx) > 0) {
-        model_raw <- trimws(as.character(md[[model_idx[1]]]))
-        valid_rows <- !is.na(groups_raw) & !is_missing_like(groups_raw) & !is.na(model_raw) & !is_missing_like(model_raw)
-
-        if (any(valid_rows)) {
-          groups_raw[valid_rows] <- normalize_model_group_pairs(
-            groups_raw[valid_rows],
-            model_raw[valid_rows],
-            model_allowed_groups_by_model,
-            allowed_groups[1],
-            allowed_groups[2]
-          )
-        }
-      }
-    }
-
-    groups_raw <- groups_raw[!is.na(groups_raw)]
-    groups_raw <- groups_raw[!is_missing_like(groups_raw)]
-
-    groups_norm <- toupper(groups_raw)
-    invalid_groups <- sort(unique(groups_raw[!(groups_norm %in% allowed_groups_norm)]))
-
-    if (length(invalid_groups) > 0) {
-      return(list(
-        ok = FALSE,
-        message = paste0(
-          "Invalid values in metadata group column ('",
-          group_col,
-          "'). Allowed values: ",
-          paste(valid_group_values, collapse = ", "),
-          ". Found: ",
-          paste(invalid_groups, collapse = ", "),
-          ". Please review your metadata file and fix the group column."
-        )
-      ))
-    }
-  }
-
-  list(ok = TRUE, message = "Metadata validation passed.")
-}
-
-
-setting_input_id <- function(key) {
-  paste0("settings_", key)
-}
-
-setting_has_value <- function(value) {
-  !is.null(value) && length(value) > 0 && !all(is.na(value)) && nzchar(trimws(as.character(value)[1]))
-}
 
 settings_form_sections <- list(
   list(
-    title = "Processing setup",
+    title = "Normalization",
     fields = list(
       list(
         key = "normalization_mode",
-        label = "Main normalization",
+        label = "Preprocessing scenario",
         type = "select",
-        choices = c("none", "PQN", "QC_LOESS"),
+        choices = c("QC-RSC" = "qcrsc", "QC-LOESS" = "qc_loess", "Cyclic LOESS" = "cyclic_loess", "PQN-QC" = "pqn_qc", "PQN Sample" = "pqn_sample", "None" = "none"),
         default = "none"
       ),
-      list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = FALSE),
-      list(key = "sanitize_mode", label = "Sanitize mode", type = "select", choices = c("none", "greek_latin_ascii", "ascii_translit"), default = "none"),
-      list(
-        key = "rsd_filter_metric",
-        label = "RSD filter metric",
-        type = "select",
-        choices = c("none", "qc_rsd", "rsd"),
-        default = "none"
-      ),
-      list(
-        key = "rsd_thresholds",
-        label = "RSD thresholds",
-        type = "vector_numeric",
-        default = c(20),
-        placeholder = "Example: 10, 15, 20, 30"
-      ),
-      list(
-        key = "low_variance_filter_method",
-        label = "Low-variance filter",
-        type = "select",
-        choices = c("none", "iqr"),
-        default = "none"
-      ),
-      list(
-        key = "low_variance_filter_fraction",
-        label = "IQR removal fraction",
-        type = "numeric",
-        default = 0.20,
-        step = 0.05,
-        min = 0,
-        max = 1
-      ),
-      list(
-        key = "duplicate_name_strategy",
-        label = "Duplicate handling strategy",
-        type = "select",
-        choices = c("reference_or_best_qc_rsd", "keep_separate", "collapse_mean", "collapse_sum", "collapse_best_qc_rsd"),
-        default = "collapse_best_qc_rsd"
-      )
+      list(key = "make_qc_diagnostics", label = "Run QC/normalization audit", type = "logical_select", default = FALSE)
     )
   ),
   list(
     title = "Statistics thresholds",
     fields = list(
-      list(key = "statistical_test_type", label = "Statistical test", type = "select", choices = c("student", "welch", "wilcoxon", "limma"), default = "student"),
-      list(key = "test_is_paired", label = "Paired test", type = "select", choices = c("Unpaired" = "FALSE", "Paired" = "TRUE"), default = "FALSE"),
-      list(key = "run_metrics", label = "Run metrics", type = "select", choices = c("FDR", "p_value", "FDR_and_p_value"), default = "FDR_and_p_value"),
       list(key = "p_value_cutoff", label = "P-value cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
       list(key = "fdr_cutoff", label = "FDR cutoff", type = "numeric", default = 0.05, step = 0.001, min = 0, max = 1),
       list(key = "fc_cutoff_log2", label = "FC cutoff (log2)", type = "numeric", default = 0, step = 0.1, min = 0)
     )
   ),
   list(
-    title = "Plots and figures",
+    title = "Statistical analysis",
+    note = tags$div(
+      class = "small-note settings-section-note",
+      tags$strong("Multi-group analysis: "),
+      "exploratory and complementary. The five primary pairwise comparisons remain enabled. The global test has no directional FC or volcano plot; select only biologically interpretable follow-up pairs."
+    ),
+    fields = list(
+      list(
+        key = "comparison_mode",
+        label = "How many groups will be compared?",
+        type = "select",
+        choices = c(
+          "Primary pairwise comparisons" = "pairwise",
+          "Primary + exploratory multigroup" = "multigroup",
+          "Primary + multigroup (legacy both)" = "both"
+        ),
+        default = "pairwise"
+      ),
+      list(
+        key = "statistical_test_type",
+        label = "Pairwise test",
+        type = "select",
+        choices = c("student", "welch", "wilcoxon", "limma"),
+        default = "student"
+      ),
+      list(
+        key = "test_is_paired",
+        label = "Pairwise design",
+        type = "select",
+        choices = c("Unpaired" = "FALSE", "Paired" = "TRUE"),
+        default = "FALSE"
+      ),
+      list(key = "run_metrics", label = "Significance metric", type = "select", choices = c("FDR", "p_value", "FDR_and_p_value"), default = "FDR_and_p_value")
+    )
+  ),
+  list(
+    title = "Multi-group statistics",
+    condition = "input.settings_comparison_mode == 'multigroup' || input.settings_comparison_mode == 'both'",
+    fields = list(
+      list(
+        key = "multigroup_groups",
+        label = "Groups to compare",
+        type = "detected_multiselect",
+        default = character(0)
+      ),
+      list(key = "multigroup_test", label = "Global test (3+ groups)", type = "select", choices = c("kruskal", "anova", "welch_anova"), default = "anova"),
+      list(
+        key = "multigroup_pairwise_mode",
+        label = "Pairwise follow-up",
+        type = "select",
+        choices = c("Selected biologically interpretable pairs" = "selected", "No additional follow-up" = "none"),
+        default = "selected"
+      ),
+      list(
+        key = "multigroup_pairwise_pairs",
+        label = "Selected pairs",
+        type = "nullable_vector_text",
+        default = NULL,
+        condition = "input.settings_multigroup_pairwise_mode == 'selected'"
+      )
+    )
+  ),
+  list(
+    title = "PCA",
     fields = list(
       list(key = "pca_scaling", label = "PCA scaling", type = "select", choices = c("none", "pareto", "autoscale"), default = "pareto"),
-      list(key = "ellipse_positive", label = "Enable group ellipses", type = "logical_select", default = TRUE),
-      list(key = "heatmap_scale_method", label = "Heatmap scale", type = "select", choices = c("none", "zscore", "pareto"), default = "pareto"),
-      list(key = "heatmap_cluster_distance", label = "Heatmap cluster distance", type = "select", choices = c("euclidean", "manhattan"), default = "euclidean"),
-      list(key = "heatmap_cluster_method", label = "Heatmap cluster method", type = "select", choices = c("ward.D2", "complete", "average"), default = "ward.D2"),
+      list(key = "pca_label_samples", label = "Label PCA samples", type = "logical_select", default = TRUE)
+    )
+  ),
+  list(
+    title = "Heatmap",
+    fields = list(
       list(key = "heatmap_top_n", label = "Heatmap top N", type = "integer", default = 50, step = 1, min = 1),
-      list(key = "make_volcano_plots", label = "Make volcano plots", type = "logical_select", default = TRUE),
-      list(key = "volcano_add_labels", label = "Add volcano labels", type = "logical_select", default = TRUE)
+      list(key = "make_heatmap_by_model", label = "Heatmap by model", type = "logical_select", default = TRUE),
+      list(key = "make_heatmap_by_model_sex", label = "Heatmap by model and sex", type = "logical_select", default = TRUE),
+      list(key = "heatmap_scale_method", label = "Heatmap scale method", type = "select", choices = c("none", "zscore", "pareto"), default = "pareto")
     )
   ),
   list(
     title = "Output controls",
+    note = tags$div(
+      class = "small-note settings-section-note",
+      tags$strong("Output level: "),
+      tags$br(),
+      "Standard is recommended.",
+      tags$br(),
+      "Minimal keeps final statistics, principal/combined PCA, primary volcano plots, README, and log.",
+      tags$br(),
+      "Full / Debug adds every intermediate and technical artifact."
+    ),
     fields = list(
-      list(key = "export_metaboanalyst_ready", label = "Export MetaboAnalyst table", type = "logical_select", default = TRUE),
-      list(key = "save_stats_excel_per_model", label = "Save stats Excel per model", type = "logical_select", default = TRUE),
-      list(key = "save_sig_metabolites_txt_per_model", label = "Save significant metabolite TXT", type = "logical_select", default = TRUE),
-      list(key = "minimal_output", label = "Minimal output", type = "logical_select", default = FALSE)
+      list(
+        key = "output_level",
+        label = "Output level",
+        type = "select",
+        choices = c("Minimal" = "minimal", "Standard" = "standard", "Full / Debug" = "full_debug"),
+        default = "standard"
+      )
+    )
+  ),
+  list(
+    title = "Volcano",
+    fields = list(
+      list(key = "make_volcano_plots", label = "Pairwise volcano plots", type = "logical_select", default = TRUE),
+      list(key = "volcano_add_labels", label = "Add volcano labels", type = "logical_select", default = TRUE),
+      list(key = "volcano_add_cutoff_lines", label = "Add cutoff lines", type = "logical_select", default = TRUE)
+    )
+  ),
+  list(
+    title = "Feature filters",
+    fields = list(
+      list(key = "active_variant", label = "RSD filter", type = "select", choices = c("none", "QC_RSD", "RSD"), default = "none"),
+      list(key = "rsd_thresholds", label = "RSD threshold", type = "numeric", default = 20, step = 1, min = 0),
+      list(key = "low_variance_filter_method", label = "Low-variance filter", type = "select", choices = c("iqr", "none"), default = "none"),
+      list(key = "low_variance_filter_fraction", label = "IQR fraction", type = "numeric", default = 0.20, step = 0.01, min = 0, max = 1),
+      list(key = "use_only_known", label = "Use only known features", type = "logical_select", default = TRUE),
+      list(
+        key = "duplicate_name_strategy",
+        label = "Duplicate handling",
+        type = "select",
+        choices = c("reference_or_best_qc_rsd", "keep_separate", "collapse_mean", "collapse_sum", "collapse_best_qc_rsd"),
+        default = "collapse_best_qc_rsd"
+      )
     )
   )
 )
@@ -410,15 +258,22 @@ settings_builder_layout <- list(
   run_setup = list(
     label = "Run setup",
     sections = c(
-      "Processing setup",
-      "Statistics thresholds"
+      "Statistical analysis",
+      "Multi-group statistics",
+      "Statistics thresholds",
+      "Normalization",
+      "Feature filters"
     ),
-    widths = c(12, 12)
+    widths = c(12, 12, 6, 6, 12)
   ),
   visual_outputs = list(
     label = "Visual outputs",
-    sections = c("Plots and figures"),
-    widths = c(12)
+    sections = c(
+      "Heatmap",
+      "Volcano",
+      "PCA"
+    ),
+    widths = c(6, 6, 12)
   ),
   exports = list(
     label = "Exports",
@@ -428,63 +283,63 @@ settings_builder_layout <- list(
   ),
   field_columns = c(
     default = 2,
-    "Processing setup" = 3,
+    "Output controls" = 2,
+    "PCA" = 2,
+    "Normalization" = 2,
+    "Feature filters" = 3,
     "Statistics thresholds" = 3,
-    "Plots and figures" = 3,
-    "Output controls" = 3
+    "Statistical analysis" = 2,
+    "Multi-group statistics" = 2
+    # "Heatmap" = 4,
+    # "Volcano" = 3
   )
 )
 
 settings_glossary_map <- c(
-  use_reference_file = "Enables reference-table matching for duplicate handling. When disabled, duplicate handling falls back to the selected non-reference strategy.",
-  output_dir = "Defines where all run outputs, logs, audits, tables, and figures are written.",
-  use_weight_normalization = "Applies sample-weight normalization before the main normalization step. The weight column is read from metadata.",
-  normalization_mode = "Main normalization after optional weight normalization: none keeps the post-weight matrix, PQN applies QC-reference probabilistic quotient normalization, and QC_LOESS corrects signal drift using QC samples.",
-  loess_min_qc_points = "Minimum number of valid QC values required for a feature to receive QC-LOESS drift correction.",
-  QC_LOESS_span = "LOESS smoothing span for QC-LOESS. Smaller values follow local drift more closely; larger values smooth more strongly.",
-  injection_order_path = "Optional separate sample/run-order table for QC-LOESS. Supports sample plus injection_order/run_order columns, or Compound Discoverer File Name plus Creation Date exports.",
-  rsd_filter_metric = "Controls RSD-based variant creation: none skips RSD filtering, qc_rsd filters by QC sample RSD, and rsd filters by biological/sample RSD.",
-  rsd_thresholds = "Numeric RSD cutoffs used to create variants such as QC_RSD20 or RSD20.",
-  low_variance_filter_method = "Low-variance feature filtering method. none disables it; iqr removes features with the lowest interquartile range.",
-  low_variance_filter_fraction = "Fraction of lowest-IQR features removed when low_variance_filter_method is iqr.",
-  duplicate_name_strategy = "Sets how duplicate named features are merged or kept: reference matching, best QC RSD, mean, sum, or separate features.",
-  run_metrics = "Selects the significance metric used in run-level decisions and rankings.",
-  p_value_cutoff = "Raw p-value threshold used for significance decisions, volcano highlighting, and p-value ranked outputs.",
-  fdr_cutoff = "Adjusted p-value threshold used for FDR significance decisions, volcano highlighting, and FDR ranked outputs.",
-  fc_cutoff_log2 = "Minimum absolute log2 fold-change required when fold-change filtering is enabled; use 0 to disable the fold-change requirement.",
-  statistical_test_type = "Statistical test used for group comparisons: student, welch, wilcoxon, or limma.",
-  test_is_paired = "Controls whether group comparisons use paired testing where supported. Unpaired is the default for independent samples.",
-  use_only_known = "If TRUE, removes features without a known/canonical name before downstream statistics and plots.",
-  pca_scaling = "Scaling applied before PCA: none leaves variables unchanged, pareto divides by sqrt(SD), and autoscale divides by SD.",
-  ellipse_positive = "Controls PCA ellipse rendering behavior; when TRUE, group ellipses are drawn only for eligible comparisons.",
-  heatmap_top_n = "Maximum number of top-ranked features shown in each top heatmap.",
-  heatmap_scale_method = "Scaling applied to heatmap matrices: none, zscore, or pareto.",
-  heatmap_cluster_distance = "Distance metric used for heatmap clustering: euclidean or manhattan.",
-  heatmap_cluster_method = "Hierarchical clustering linkage used for heatmaps: ward.D2, complete, or average.",
-  dup_mz_digits = "Rounding precision for m/z during duplicate detection.",
-  dup_rt_digits = "Rounding precision for RT during duplicate detection.",
-  sanitize_mode = "Text handling for exported feature names: none preserves characters, greek_latin_ascii transliterates Greek/Latin to ASCII, and ascii_translit uses general ASCII transliteration.",
-  make_heatmap_by_model = "TRUE generates top-ranked heatmaps per model.",
-  make_heatmap_by_model_sex = "TRUE also generates top-ranked heatmaps split by sex.",
-  export_metaboanalyst_ready = "TRUE exports a MetaboAnalyst-ready table for downstream enrichment analysis.",
-  save_stats_excel_per_model = "TRUE saves an Excel workbook with statistics split by model and comparison.",
-  save_sig_metabolites_txt_per_model = "TRUE saves plain-text lists of significant metabolites for each comparison.",
-  make_volcano_plots = "TRUE generates volcano plot figures for configured comparisons.",
-  volcano_add_labels = "TRUE adds labels to selected/significant volcano plot points.",
-  minimal_output = "TRUE keeps selected plots/statistics while skipping selected intermediate global exports."
+  normalization_mode = "Preprocessing scenario applied before downstream filtering and statistics. Use PQN Sample when QC samples are absent or too few.",
+  make_qc_diagnostics = "When TRUE, runs the optional QC/normalization audit plots and summary tables. Leave FALSE for faster routine runs.",
+  active_variant = "Chooses the RSD filter family: none disables RSD filtering, QC_RSD uses QC samples, and RSD uses raw SD/mean.",
+  rsd_thresholds = "Numeric RSD cutoff used with QC_RSD or RSD. Example: QC_RSD with 30 is saved as rsd_thresholds <- c(30).",
+  low_variance_filter_method = "Controls the low-variance filter. Use iqr to remove the lowest-variance features, or none to keep them.",
+  low_variance_filter_fraction = "Fraction of features removed by the IQR low-variance filter. Example: 0.20 removes the lowest 20%.",
+  use_only_known = "When TRUE, keeps only features with known identities.",
+  p_value_cutoff = "P-value threshold used for significance decisions and volcano/heatmap filtering.",
+  fdr_cutoff = "Adjusted p-value/FDR threshold used when the selected metric includes FDR.",
+  fc_cutoff_log2 = "Minimum absolute log2 fold-change required where fold-change filtering is enabled. Use 0 to disable this cutoff.",
+  statistical_test_type = "Test used for two-group comparisons and optional pairwise follow-ups. It is separate from the global multi-group test.",
+  test_is_paired = "Controls whether two-group comparisons use paired or unpaired observations.",
+  run_metrics = "Controls whether significance outputs use raw p-values, FDR-adjusted values, or both.",
+  duplicate_name_strategy = "Controls how duplicated metabolite names are retained or collapsed.",
+  output_level = "Controls exported files without changing calculations: Minimal keeps final stats/PCA/main volcano/README/log; Standard adds main heatmaps and summarized QC/normalization outputs; Full / Debug exports all intermediate and technical artifacts.",
+  comparison_mode = "The five primary pairwise comparisons always run. Multi-group mode adds an exploratory global test and optional selected follow-up pairs.",
+  multigroup_groups = "Editable group names used for multi-group analysis. Leave empty to use all detected biological groups per model.",
+  multigroup_test = "Exploratory global test for three or more groups. It detects whether groups differ, but does not estimate a directional fold change.",
+  multigroup_pairwise_mode = "Controls additional follow-up beyond the five primary comparisons. Prefer selected biologically interpretable pairs; the global test itself is never used for volcano plots.",
+  multigroup_pairwise_pairs = "Selected follow-up pairs. Use entries like pre vs post, pre/post, or pre,post.",
+  pca_scaling = "Scaling applied before PCA: none, pareto, or autoscale.",
+  pca_label_samples = "When TRUE, sample labels are printed on PCA plots.",
+  heatmap_top_n = "Maximum number of ranked features shown in standard heatmaps.",
+  make_heatmap_by_model = "When TRUE, generates heatmaps for each model.",
+  make_heatmap_by_model_sex = "When TRUE, generates heatmaps split by model and sex.",
+  heatmap_scale_method = "Scaling used inside heatmap matrices: none, zscore, or pareto.",
+  make_volcano_plots = "When TRUE, generates volcano plots only for pairwise comparisons. MULTIGROUP_GLOBAL is always excluded because it has no directional effect.",
+  volcano_add_labels = "When TRUE, labels significant points in volcano plots.",
+  volcano_add_cutoff_lines = "When TRUE, draws cutoff guide lines on volcano plots.",
+  export_metaboanalyst_ready = "When TRUE, writes the main MetaboAnalyst-compatible export.",
+  save_stats_excel_per_model = "When TRUE, writes one Excel stats workbook per model.",
+  save_sig_metabolites_txt_per_model = "When TRUE, writes plain-text lists of significant metabolites per model/comparison."
 )
 
-read_initial_config <- function() {
-  if (file.exists(active_config_path)) {
-    config_text <- safe_read_file(active_config_path)
-    config_text <- replace_or_append_config_line(
-      config_text,
-      "model_allowed_groups_by_model",
-      "NULL"
-    )
-    return(config_text)
-  }
-  "# No settings file found in config/."
+initial_settings_text <- read_initial_config()
+
+initial_setting_value <- function(key, default = "") {
+  setting_display_value(initial_settings_text, key, default = default)
 }
 
-initial_settings_text <- read_initial_config()
+initial_setting_logical <- function(key, default = FALSE) {
+  setting_display_logical(initial_settings_text, key, default = default)
+}
+
+initial_setting_numeric <- function(key, default = NA_real_) {
+  setting_display_numeric(initial_settings_text, key, default = default)
+}

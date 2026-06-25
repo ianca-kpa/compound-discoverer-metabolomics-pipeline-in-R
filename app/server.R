@@ -6,67 +6,126 @@ server <- function(input, output, session) {
   missing_packages_state <- reactiveVal(setdiff(required_packages, rownames(installed.packages())))
   initializing <- reactiveVal(TRUE)
   clearing_inputs <- reactiveVal(FALSE)
+  output_level_last_confirmed <- reactiveVal("standard")
+  output_level_modal_active <- reactiveVal(FALSE)
 
   process_state <- reactiveValues(
     proc = NULL,
     log_file = NULL,
     pipeline_log_file = NULL,
-    running = FALSE
+    running = FALSE,
+    started_at = NULL,
+    pid = NULL
   )
-  minimal_output_guard <- reactiveValues(updating = FALSE)
   action_confirm <- reactiveValues(
     ask_run = TRUE,
     ask_stop = TRUE,
     pending_run_cfg = NULL
   )
   selected_result_image <- reactiveVal(NULL)
-  gallery_state <- reactiveValues(dir = NULL, prefix = NULL)
   gallery_refresh_tick <- reactiveVal(0)
-  results_cleared <- reactiveVal(FALSE)
+  gallery_state <- reactiveValues(dir = NULL, prefix = NULL)
   session_started_at <- Sys.time()
   inputs_cleared_timestamp <- reactiveVal(NULL)
   use_reference_file_last_state <- reactiveVal(FALSE)
+
+  pipeline_modal <- function(title, ..., footer, easyClose = TRUE, size = "m") {
+    modalDialog(
+      title = title,
+      size = size,
+      easyClose = easyClose,
+      tags$div(
+        class = "pipeline-modal-body",
+        ...
+      ),
+      footer = tags$div(
+        class = "pipeline-modal-footer",
+        footer
+      )
+    )
+  }
+
+  refresh_package_status <- function() {
+    missing_pkgs <- find_missing_packages()
+    missing_packages_state(missing_pkgs)
+
+    if (length(missing_pkgs) == 0) {
+      install_status_text("All required packages are installed.")
+    } else {
+      install_status_text(paste0(
+        "Missing packages detected (",length(missing_pkgs), "): ",
+        paste(missing_pkgs, collapse = ", ")
+      ))
+    }
+
+    invisible(missing_pkgs)
+  }
+
+  reset_settings_builder_inputs <- function() {
+    if (!exists("settings_form_sections", inherits = TRUE)) {
+      return(invisible(FALSE))
+    }
+
+    reset_one_setting <- function(spec) {
+      key <- as.character(spec$key)[1]
+      type <- if (!is.null(spec$type) && length(spec$type) > 0) as.character(spec$type)[1] else "text"
+      id <- setting_input_id(key)
+      default <- spec$default
+
+      try(
+        switch(type,
+          checkbox = updateCheckboxInput(session, id, value = isTRUE(default)),
+          logical_select = updateSelectInput(session, id, selected = if (isTRUE(default)) "TRUE" else "FALSE"),
+          numeric = updateNumericInput(session, id, value = suppressWarnings(as.numeric(default)[1])),
+          integer = updateNumericInput(session, id, value = suppressWarnings(as.integer(default)[1])),
+          select = updateSelectInput(session, id, selected = as.character(default)[1]),
+          multiselect = updateSelectizeInput(session, id, selected = setting_default_vector(default)),
+          vector_numeric = updateSelectizeInput(session, id, selected = setting_default_numeric_vector(default)),
+          vector_text = updateSelectizeInput(session, id, selected = setting_default_vector(default)),
+          detected_multiselect = updateCheckboxGroupInput(session, id, selected = setting_default_vector(default)),
+          nullable_vector_text = updateSelectizeInput(session, id, selected = setting_default_vector(default)),
+          selectize_text = updateSelectizeInput(session, id, selected = as.character(default)[1]),
+          sheet = updateTextInput(session, id, value = as.character(default)[1]),
+          updateTextInput(session, id, value = as.character(default)[1])
+        ),
+        silent = TRUE
+      )
+    }
+
+    for (section in settings_form_sections) {
+      for (spec in section$fields) {
+        reset_one_setting(spec)
+      }
+    }
+
+    invisible(TRUE)
+  }
 
   reset_common_inputs <- function() {
     shinyjs::reset("data_file")
     shinyjs::reset("metadata_file")
     shinyjs::reset("injection_order_file")
     shinyjs::reset("reference_file")
-    updateSelectInput(
-      session,
-      "existing_injection_order_path",
-      choices = c("None" = "", available_injection_order_files()),
-      selected = ""
-    )
+    reset_settings_builder_inputs()
     updateTextInput(session, "output_dir", value = "output")
-    updateSelectInput(session, setting_input_id("duplicate_name_strategy"), selected = "collapse_best_qc_rsd")
-    updateSelectInput(session, setting_input_id("run_metrics"), selected = "FDR_and_p_value")
-    updateSelectInput(session, setting_input_id("statistical_test_type"), selected = "student")
-    updateSelectInput(session, setting_input_id("test_is_paired"), selected = "FALSE")
+    updateSelectizeInput(session, "allowed_metadata_groups", selected = character(0))
     updateCheckboxInput(session, "use_reference_file", value = FALSE)
     updateCheckboxInput(session, "use_weight_normalization", value = FALSE)
-    updateSelectInput(session, setting_input_id("normalization_mode"), selected = "none")
-    updateSelectInput(session, setting_input_id("minimal_output"), selected = "FALSE")
     updateCheckboxInput(session, "manual_metadata_cols", value = FALSE)
     updateCheckboxInput(session, "show_metadata_column_fields", value = FALSE)
     updateCheckboxInput(session, "manual_reference_cols", value = FALSE)
+    output_level_last_confirmed("standard")
     reset_metadata_columns()
     reset_reference_columns()
+    use_reference_file_last_state(FALSE)
     selected_result_image(NULL)
     pipeline_log_text("No run executed yet.")
-    gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
     inputs_cleared_timestamp(Sys.time())
   }
 
   session$onFlushed(function() {
     initializing(TRUE)
-    default_cfg <- if (file.exists(active_config_path)) {
-      safe_read_file(active_config_path)
-    } else {
-      "# No default settings file found in config/."
-    }
     reset_common_inputs()
-    reset_settings_form_inputs()
     status_message("Ready.")
     shinyjs::runjs("setTimeout(function() { Shiny.setInputValue('init_complete', true); }, 50);")
   })
@@ -78,28 +137,32 @@ server <- function(input, output, session) {
     once = TRUE
   )
 
-  observeEvent(input$metadata_file,
+  observeEvent(input[[setting_input_id("normalization_mode")]],
     {
-      req(input$metadata_file)
       if (isTRUE(initializing())) {
         return()
       }
+      scenario <- normalize_normalization_mode(
+        input[[setting_input_id("normalization_mode")]],
+        default = NULL
+      )
+      if (is.null(scenario) || !scenario %in% c("qc_loess", "qcrsc")) {
+        return()
+      }
+      correction_label <- if (identical(scenario, "qcrsc")) "QC-RSC" else "QC-LOESS"
 
-      showModal(modalDialog(
+      showModal(pipeline_modal(
         title = "Weight normalization",
-        tags$p(
-          class = "small-note",
-          "When enabled, each biological sample is scaled by its metadata weight before the selected main normalization mode is applied."
-        ),
+        tags$p(paste0("Apply weight normalization after ", correction_label, "?")),
         radioButtons(
           "modal_weight_norm_choice",
-          "Apply weight normalization to samples?",
+          label = NULL,
           choices = c("Yes" = "yes", "No" = "no"),
-          selected = if (isTRUE(setting_display_logical(initial_settings_text, "use_weight_normalization", default = FALSE))) "yes" else "no"
+          selected = if (isTRUE(input$use_weight_normalization)) "yes" else "no"
         ),
         footer = tagList(
-          modalButton("Cancel", icon = icon("xmark")),
-          actionButton("confirm_weight_norm", "Confirm", icon = icon("check"))
+          modalButton("Cancel"),
+          actionButton("confirm_weight_norm", "Confirm")
         ),
         easyClose = TRUE
       ))
@@ -113,340 +176,71 @@ server <- function(input, output, session) {
     removeModal()
   })
 
-  set_minimal_output_status <- function(enabled) {
-    if (isTRUE(enabled)) {
-      status_message("Minimal output enabled: plots and statistics are preserved; selected intermediate global exports are skipped.")
-    } else {
-      status_message("Minimal output disabled: full set of outputs (including detailed plots/exports) will be generated.")
-    }
-  }
-
-  setting_input_text <- function(key, default = "") {
-    value <- input[[setting_input_id(key)]]
-    if (is.null(value) || length(value) == 0 || all(is.na(value)) || !nzchar(safe_trimws(as.character(value)[1]))) {
-      value <- setting_display_value(input$config_text, key, default = default)
-    }
-    safe_trimws(as.character(value)[1])
-  }
-
-  setting_input_logical <- function(key, default = FALSE) {
-    value <- input[[setting_input_id(key)]]
-    if (is.null(value) || length(value) == 0 || all(is.na(value))) {
-      return(setting_display_logical(input$config_text, key, default = default))
-    }
-    toupper(safe_trimws(as.character(value)[1])) %in% c("TRUE", "1", "YES")
-  }
-
-  derive_active_variant <- function(metric, thresholds, default_threshold = 20) {
-    metric <- tolower(safe_trimws(as.character(metric)[1]))
-    if (!metric %in% c("none", "qc_rsd", "rsd")) {
-      metric <- "none"
-    }
-    if (identical(metric, "none")) {
-      return("none")
-    }
-
-    threshold_values <- suppressWarnings(as.numeric(as.character(thresholds)))
-    threshold_values <- threshold_values[!is.na(threshold_values)]
-    if (length(threshold_values) == 0) {
-      threshold_values <- default_threshold
-    }
-
-    threshold_label <- format(threshold_values[1], scientific = FALSE, trim = TRUE)
-    if (identical(metric, "qc_rsd")) {
-      return(paste0("QC_RSD", threshold_label))
-    }
-
-    paste0("RSD", threshold_label)
-  }
-
-  reset_settings_form_inputs <- function() {
-    for (section in settings_form_sections) {
-      for (spec in section$fields) {
-        input_id <- setting_input_id(spec$key)
-        spec_type <- if (!is.null(spec$type) && length(spec$type) > 0) as.character(spec$type)[1] else "text"
-        spec_default <- spec$default
-        spec_choices <- if (!is.null(spec$choices) && length(spec$choices) > 0) as.character(spec$choices) else character(0)
-
-        switch(spec_type,
-          checkbox = updateCheckboxInput(session, input_id, value = isTRUE(spec_default)),
-          logical_select = updateSelectInput(session, input_id, selected = if (isTRUE(spec_default)) "TRUE" else "FALSE"),
-          numeric = updateNumericInput(session, input_id, value = spec_default),
-          integer = updateNumericInput(session, input_id, value = spec_default),
-          select = updateSelectInput(session, input_id, choices = spec_choices, selected = as.character(spec_default)[1]),
-          multiselect = updateSelectizeInput(session, input_id, choices = spec_choices, selected = as.character(spec_default), server = FALSE),
-          vector_numeric = updateSelectizeInput(
-            session,
-            input_id,
-            choices = unique(c(as.character(spec_default), spec_choices)),
-            selected = as.character(spec_default),
-            server = FALSE
-          ),
-          vector_text = updateSelectizeInput(
-            session,
-            input_id,
-            choices = unique(c(as.character(spec_default), spec_choices)),
-            selected = as.character(spec_default),
-            server = FALSE
-          ),
-          nullable_vector_text = updateSelectizeInput(
-            session,
-            input_id,
-            choices = unique(c(as.character(spec_default), spec_choices)),
-            selected = as.character(spec_default),
-            server = FALSE
-          ),
-          selectize_text = updateSelectizeInput(
-            session,
-            input_id,
-            choices = unique(c(as.character(spec_default), spec_choices)),
-            selected = as.character(spec_default)[1],
-            server = FALSE
-          ),
-          sheet = updateTextInput(session, input_id, value = as.character(spec_default)[1]),
-          updateTextInput(session, input_id, value = as.character(spec_default)[1])
-        )
+  observeEvent(input[[setting_input_id("output_level")]],
+    {
+      if (isTRUE(initializing()) || isTRUE(clearing_inputs()) || isTRUE(output_level_modal_active())) {
+        return()
       }
-    }
-  }
 
-  render_builder_control <- function(spec) {
-    spec_key <- if (!is.null(spec$key) && length(spec$key) > 0 && nzchar(as.character(spec$key)[1])) {
-      as.character(spec$key)[1]
-    } else {
-      "unknown_key"
-    }
-    spec_label <- if (!is.null(spec$label) && length(spec$label) > 0 && nzchar(as.character(spec$label)[1])) {
-      as.character(spec$label)[1]
-    } else {
-      spec_key
-    }
-    spec_type <- if (!is.null(spec$type) && length(spec$type) > 0 && nzchar(as.character(spec$type)[1])) {
-      as.character(spec$type)[1]
-    } else {
-      "text"
-    }
-    spec_choices <- if (!is.null(spec$choices) && length(spec$choices) > 0) {
-      as.character(spec$choices)
-    } else {
-      character(0)
-    }
-
-    input_id <- setting_input_id(spec_key)
-    default_text <- ""
-
-    to_scalar <- function(x, fallback = "") {
-      if (is.null(x) || length(x) == 0 || all(is.na(x))) {
-        return(as.character(fallback))
-      }
-      as.character(x[1])
-    }
-
-    value <- switch(spec_type,
-      checkbox = setting_display_logical(default_text, spec_key, default = isTRUE(spec$default)),
-      logical_select = if (setting_display_logical(default_text, spec_key, default = isTRUE(spec$default))) "TRUE" else "FALSE",
-      numeric = setting_display_numeric(default_text, spec_key, default = spec$default),
-      integer = setting_display_numeric(default_text, spec_key, default = spec$default),
-      multiselect = setting_default_vector(setting_display_value(default_text, spec_key, default = spec$default)),
-      vector_numeric = setting_default_numeric_vector(setting_display_value(default_text, spec_key, default = spec$default)),
-      vector_text = setting_default_vector(setting_display_value(default_text, spec_key, default = spec$default)),
-      nullable_vector_text = setting_default_vector(setting_display_value(default_text, spec_key, default = spec$default)),
-      setting_display_value(default_text, spec_key, default = spec$default)
-    )
-    vector_choices <- unique(c(as.character(value), as.character(spec$default), spec_choices))
-    vector_choices <- vector_choices[nzchar(vector_choices)]
-
-    control <- switch(spec_type,
-      checkbox = checkboxInput(input_id, spec_label, value = isTRUE(value)),
-      logical_select = selectInput(
-        input_id,
-        spec_label,
-        choices = c("TRUE", "FALSE"),
-        selected = value
-      ),
-      numeric = numericInput(
-        input_id,
-        spec_label,
-        value = value,
-        min = spec$min,
-        max = spec$max,
-        step = if (!is.null(spec$step)) spec$step else 0.1
-      ),
-      integer = numericInput(
-        input_id,
-        spec_label,
-        value = value,
-        min = spec$min,
-        max = spec$max,
-        step = if (!is.null(spec$step)) spec$step else 1
-      ),
-      select = selectInput(
-        input_id,
-        spec_label,
-        choices = spec_choices,
-        selected = {
-          value_chr <- trimws(to_scalar(value, fallback = ""))
-          if (identical(spec_key, "normalization_mode")) {
-            value_norm <- toupper(value_chr)
-            if (value_norm == "LOESS") value_norm <- "QC_LOESS"
-            value_chr <- if (value_norm == "NONE") "none" else value_norm
-          }
-          if (length(spec_choices) == 0) {
-            ""
-          } else if (!nzchar(value_chr) || !(value_chr %in% spec_choices)) {
-            as.character(spec_choices[1])
-          } else {
-            value_chr
-          }
-        }
-      ),
-      multiselect = selectizeInput(
-        input_id,
-        spec_label,
-        choices = spec_choices,
-        selected = intersect(as.character(value), spec_choices),
-        multiple = TRUE,
-        options = list(plugins = list("remove_button"))
-      ),
-      vector_numeric = selectizeInput(
-        input_id,
-        spec_label,
-        choices = vector_choices,
-        selected = if (length(value) == 0) character(0) else value,
-        multiple = TRUE,
-        options = list(
-          create = TRUE,
-          persist = TRUE,
-          placeholder = if (!is.null(spec$placeholder)) as.character(spec$placeholder)[1] else "Add numeric values and press Enter"
-        )
-      ),
-      vector_text = selectizeInput(
-        input_id,
-        spec_label,
-        choices = vector_choices,
-        selected = if (length(value) == 0) character(0) else value,
-        multiple = TRUE,
-        options = list(
-          create = TRUE,
-          persist = TRUE,
-          placeholder = if (!is.null(spec$placeholder)) as.character(spec$placeholder)[1] else "Add values and press Enter"
-        )
-      ),
-      nullable_vector_text = selectizeInput(
-        input_id,
-        spec_label,
-        choices = vector_choices,
-        selected = if (length(value) == 0) character(0) else value,
-        multiple = TRUE,
-        options = list(
-          create = TRUE,
-          persist = TRUE,
-          placeholder = if (!is.null(spec$placeholder)) as.character(spec$placeholder)[1] else "Optional list; leave empty for NULL"
-        )
-      ),
-      selectize_text = selectizeInput(
-        input_id,
-        spec_label,
-        choices = vector_choices,
-        selected = {
-          value_chr <- trimws(to_scalar(value, fallback = ""))
-          if (!nzchar(value_chr)) as.character(spec$default) else value_chr
-        },
-        options = list(
-          create = TRUE,
-          createOnBlur = TRUE,
-          persist = TRUE,
-          placeholder = if (!is.null(spec$placeholder)) as.character(spec$placeholder)[1] else "Type a value or choose one"
-        )
-      ),
-      sheet = textInput(input_id, spec_label, value = value),
-      textInput(input_id, spec_label, value = value)
-    )
-
-    control
-  }
-
-  safe_render_builder_control <- function(spec) {
-    tryCatch(
-      render_builder_control(spec),
-      error = function(e) {
-        fallback_key <- if (!is.null(spec$key) && length(spec$key) > 0) as.character(spec$key)[1] else "unknown_key"
-        fallback_label <- if (!is.null(spec$label) && length(spec$label) > 0) as.character(spec$label)[1] else fallback_key
-        fallback_default <- ""
-        if (!is.null(spec$default) && length(spec$default) > 0) {
-          fallback_default <- as.character(spec$default)[1]
-        }
-        fallback_value <- setting_display_value(initial_settings_text, fallback_key, default = fallback_default)
-
-        textInput(
-          setting_input_id(fallback_key),
-          fallback_label,
-          value = fallback_value
-        )
-      }
-    )
-  }
-
-  # =========================================================================
-  # Helper: Build section blocks for settings UI (builder or glossary)
-  # =========================================================================
-  # Consolidates the repeated logic of rendering form sections into structured
-  # blocks with proper grid layout and titles.
-  #
-  # @param sections List of section objects with title and fields
-  # @return Named list of tags$div blocks, keyed by section title
-  settings_layout_field_columns <- function(section_title) {
-    layout <- get0("settings_builder_layout", ifnotfound = list(), inherits = TRUE)
-    field_columns <- layout$field_columns
-
-    value <- if (!is.null(field_columns) && section_title %in% names(field_columns)) {
-      field_columns[[section_title]]
-    } else if (!is.null(field_columns) && "default" %in% names(field_columns)) {
-      field_columns[["default"]]
-    } else {
-      2
-    }
-
-    value <- suppressWarnings(as.integer(value))
-    if (is.na(value)) {
-      value <- 2
-    }
-
-    max(1, min(4, value))
-  }
-
-  build_section_blocks_ui <- function(sections) {
-    blocks <- lapply(sections, function(section) {
-      section_fields <- lapply(section$fields, safe_render_builder_control)
-      field_columns <- settings_layout_field_columns(section$title)
-
-      tags$div(
-        class = "settings-section-card",
-        style = paste0("--settings-fields-per-card:", field_columns, ";"),
-        tags$h5(section$title),
-        tags$div(
-          class = "settings-fields-grid",
-          do.call(tagList, section_fields)
-        )
+      selected_level <- normalize_output_level(
+        input[[setting_input_id("output_level")]],
+        legacy_minimal = FALSE
       )
-    })
-    names(blocks) <- vapply(sections, function(section) section$title, character(1))
-    blocks
-  }
+      if (identical(selected_level, "standard")) {
+        output_level_last_confirmed("standard")
+        return()
+      }
 
-  # =========================================================================
-  # Helper: Extract all setting keys from sections
-  # =========================================================================
-  # Flattens the nested section/fields structure to extract all unique
-  # setting keys for validation or indexing purposes.
-  #
-  # @param sections List of section objects with fields
-  # @return Character vector of unique setting keys
-  extract_settings_keys <- function(sections) {
-    unique(unlist(lapply(sections, function(section) {
-      vapply(section$fields, function(spec) spec$key, character(1))
-    }), use.names = FALSE))
-  }
+      output_level_modal_active(TRUE)
+      level_label <- switch(selected_level,
+        minimal = "Minimal",
+        full_debug = "Full / Debug",
+        selected_level
+      )
+
+      showModal(pipeline_modal(
+        title = "Confirm output level",
+        size = "m",
+        easyClose = FALSE,
+        tags$p(paste0("You selected ", level_label, " output.")),
+        tags$p("Standard is recommended for routine runs. Confirm that you want to use this output level?"),
+        footer = tagList(
+          actionButton("cancel_output_level_change", "Cancel"),
+          actionButton("confirm_output_level_change", "Confirm", class = "btn-warning")
+        )
+      ))
+    },
+    ignoreInit = TRUE
+  )
+
+  observeEvent(input$confirm_output_level_change,
+    {
+      selected_level <- normalize_output_level(
+        input[[setting_input_id("output_level")]],
+        legacy_minimal = FALSE
+      )
+      output_level_last_confirmed(selected_level)
+      output_level_modal_active(FALSE)
+      removeModal()
+    },
+    ignoreInit = TRUE
+  )
+
+  observeEvent(input$cancel_output_level_change,
+    {
+      previous_level <- normalize_output_level(
+        output_level_last_confirmed(),
+        legacy_minimal = FALSE
+      )
+      output_level_modal_active(TRUE)
+      updateSelectInput(session, setting_input_id("output_level"), selected = previous_level)
+      session$onFlushed(function() {
+        output_level_modal_active(FALSE)
+      }, once = TRUE)
+      removeModal()
+    },
+    ignoreInit = TRUE
+  )
 
   build_settings_builder_config <- function(current_text) {
     cfg <- current_text
@@ -454,6 +248,9 @@ server <- function(input, output, session) {
     for (section in settings_form_sections) {
       for (spec in section$fields) {
         input_value <- input[[setting_input_id(spec$key)]]
+        if (is.null(input_value)) {
+          next
+        }
         replacement <- switch(spec$type,
           checkbox = setting_value_logical(input_value),
           logical_select = setting_value_logical(identical(as.character(input_value)[1], "TRUE")),
@@ -463,193 +260,44 @@ server <- function(input, output, session) {
           multiselect = setting_value_vector_text(input_value),
           vector_numeric = setting_value_vector_numeric(input_value),
           vector_text = setting_value_vector_text(input_value),
+          detected_multiselect = setting_value_vector_text(input_value),
           nullable_vector_text = setting_value_vector_text(input_value, allow_null = TRUE),
           selectize_text = setting_value_text(input_value),
           sheet = setting_value_sheet(input_value),
           setting_value_text(input_value)
         )
+
         cfg <- replace_or_append(cfg, spec$key, replacement)
       }
     }
 
-    cfg <- replace_or_append(cfg, "active_variant", setting_value_text(derive_active_variant(
-      input[[setting_input_id("rsd_filter_metric")]],
+    cfg <- apply_active_variant_config(
+      cfg,
+      input[[setting_input_id("active_variant")]],
       input[[setting_input_id("rsd_thresholds")]]
-    )))
+    )
+
+    scenario <- gsub("_", "", tolower(safe_trimws(extract_config_value(cfg, "normalization_mode"))))
+    weight_selected <- isTRUE(input$use_weight_normalization)
+    if (identical(scenario, "none") && isTRUE(weight_selected)) {
+      cfg <- replace_or_append(cfg, "normalization_mode", dQuote("weight"))
+    }
+    cfg <- replace_or_append(cfg, "use_weight_normalization", if (isTRUE(weight_selected)) "TRUE" else "FALSE")
 
     cfg
   }
 
   output$settings_builder_ui <- renderUI({
-    section_blocks <- build_section_blocks_ui(settings_form_sections)
-    save_bar <- tags$div(
-      class = "settings-action-bar",
-      tags$div(
-        class = "settings-action-copy",
-        tags$strong("Settings form"),
-        tags$span("Current values are applied when running the pipeline.", style = "font-size: 13px;")
-      ),
-      actionButton("save_settings_form", "Save config/settings.R from form", icon = icon("save"))
-    )
-
-    resolve_section_name <- function(section_name) {
-      if (section_name %in% names(section_blocks)) {
-        return(section_name)
-      }
-
-      section_name
-    }
-
-    card_width_style <- function(width) {
-      width <- suppressWarnings(as.integer(width))
-      if (is.na(width)) {
-        width <- 12
-      }
-
-      width <- max(1, min(12, width))
-      paste0("grid-column: span ", width, ";")
-    }
-
-    make_section_card <- function(section_name) {
-      resolved_name <- resolve_section_name(section_name)
-      if (!resolved_name %in% names(section_blocks)) {
-        return(NULL)
-      }
-
-      section_blocks[[resolved_name]]
-    }
-
-    make_layout_card <- function(section_name, width) {
-      card <- make_section_card(section_name)
-      if (is.null(card)) {
-        return(NULL)
-      }
-
-      existing_style <- safe_trimws(card$attribs$style)
-      card$attribs$style <- paste(
-        c(existing_style[nzchar(existing_style)], card_width_style(width)),
-        collapse = " "
-      )
-
-      card
-    }
-
-    layout <- get0("settings_builder_layout", ifnotfound = list(), inherits = TRUE)
-    tab_keys <- setdiff(names(layout), "field_columns")
-    tab_panels <- lapply(tab_keys, function(tab_key) {
-      tab_spec <- layout[[tab_key]]
-      sections <- as.character(tab_spec$sections)
-      widths <- tab_spec$widths
-
-      if (is.null(widths) || length(widths) == 0) {
-        widths <- rep(12, length(sections))
-      }
-      if (length(widths) < length(sections)) {
-        widths <- rep(widths, length.out = length(sections))
-      }
-
-      cards <- Map(make_layout_card, sections, widths[seq_along(sections)])
-      cards <- Filter(Negate(is.null), cards)
-
-      if (length(cards) == 0) {
-        return(NULL)
-      }
-
-      tabPanel(
-        if (!is.null(tab_spec$label) && nzchar(as.character(tab_spec$label)[1])) as.character(tab_spec$label)[1] else tab_key,
-        tags$div(class = "settings-subtab-grid", do.call(tagList, cards))
-      )
-    })
-    tab_panels <- Filter(Negate(is.null), tab_panels)
-
-    if (length(tab_panels) == 0) {
-      tab_panels <- list(
-        tabPanel(
-          "Settings",
-          tags$div(class = "settings-subtab-grid", do.call(tagList, section_blocks))
-        )
-      )
-    }
-
-    bslib::page_fillable(
-      tags$div(
-        class = "settings-builder-shell",
-        save_bar,
-        do.call(tabsetPanel, c(list(id = "settings_form_subtabs"), tab_panels))
-      )
-    )
+    detected_groups <- get_detected_metadata_groups()
+    build_settings_builder_ui(dynamic_choices = list(
+      multigroup_groups = detected_groups,
+      multigroup_pairwise_pairs = make_multigroup_pair_choices(detected_groups)
+    ))
   })
 
   output$settings_glossary_ui <- renderUI({
-    glossary_text_for_key <- function(key) {
-      if (key %in% names(settings_glossary_map)) {
-        return(as.character(settings_glossary_map[key])[1])
-      }
-      "Controls this pipeline behavior."
-    }
-
-    section_blocks <- build_section_blocks_ui(settings_form_sections)
-    settings_keys <- extract_settings_keys(settings_form_sections)
-    glossary_keys <- settings_keys
-
-    glossary_items <- lapply(glossary_keys, function(key) {
-      text <- glossary_text_for_key(key)
-
-      tags$li(
-        tags$strong(key),
-        ": ",
-        text
-      )
-    })
-
-    tagList(
-      tags$div(
-        class = "settings-builder-shell",
-        tags$p(
-          class = "small-note",
-          "This guide explains what each configuration variable does. The editable form is in the other tab."
-        ),
-        tags$div(
-          class = "settings-guide-card",
-          tags$ul(
-            class = "small-note settings-guide-list",
-            do.call(tagList, glossary_items)
-          )
-        )
-      )
-    )
+    build_settings_glossary_ui()
   })
-
-  get_shiny_roots <- function() {
-    normalize_root <- function(path) {
-      normalizePath(path, winslash = "/", mustWork = FALSE)
-    }
-
-    roots <- c(Project = normalize_root(project_root))
-
-    home_dir <- tryCatch(normalize_root("~"), error = function(e) "")
-    if (nzchar(home_dir) && dir.exists(home_dir)) {
-      roots <- c(roots, Home = home_dir)
-    }
-
-    onedrive_dir <- safe_trimws(Sys.getenv("OneDrive"))
-    if (nzchar(onedrive_dir) && dir.exists(onedrive_dir)) {
-      roots <- c(roots, OneDrive = normalize_root(onedrive_dir))
-    }
-
-    drive_paths <- vapply(LETTERS, function(letter) paste0(letter, ":/"), character(1))
-    drive_paths <- drive_paths[dir.exists(drive_paths)]
-
-    if (length(drive_paths) > 0) {
-      drive_names <- paste0("Drive ", sub(":/$", ":", drive_paths))
-      names(drive_paths) <- drive_names
-      roots <- c(roots, drive_paths)
-    }
-
-    roots <- roots[!duplicated(roots)]
-    roots <- roots[!is.na(roots) & nzchar(trimws(roots))]
-    roots
-  }
 
   if (requireNamespace("shinyFiles", quietly = TRUE)) {
     shinyFiles::shinyDirChoose(
@@ -660,147 +308,15 @@ server <- function(input, output, session) {
     )
   }
 
-  find_missing_packages <- function() {
-    installed <- rownames(installed.packages())
-    setdiff(required_packages, installed)
-  }
-
-  replace_or_append <- function(text, key, value_expr) {
-    pattern <- paste0("^\\s*", key, "\\s*<-")
-    replacement <- paste0(key, " <- ", value_expr)
-    lines <- strsplit(text, "\\n", fixed = FALSE)[[1]]
-
-    idx <- grep(pattern, lines)
-    if (length(idx) > 0) {
-      lines[idx[1]] <- replacement
-    } else {
-      lines <- c(lines, replacement)
-    }
-
-    paste(lines, collapse = "\n")
-  }
-
-
-  parse_allowed_groups <- function(value) {
-    raw <- safe_trimws(value)
-    if (!nzchar(raw)) {
-      return(character(0))
-    }
-
-    vals <- unlist(strsplit(raw, ",", fixed = TRUE), use.names = FALSE)
-    vals <- trimws(vals)
-    unique(vals[nzchar(vals)])
-  }
-
-  group_label_key <- function(value) {
-    key <- tolower(safe_trimws(value))
-    key <- gsub("[^a-z0-9]+", "", key)
-    key
-  }
-
-  suggest_control_test_groups <- function(groups) {
-    groups <- unique(trimws(as.character(groups)))
-    groups <- groups[!is.na(groups) & nzchar(groups) & !is_missing_like(groups)]
-
-    if (length(groups) <= 1) {
-      return(groups)
-    }
-
-    keys <- vapply(groups, group_label_key, character(1), USE.NAMES = FALSE)
-    control_keys <- c("wt", "wildtype", "wild", "control", "ctrl", "vehicle", "veh", "sham", "normal", "healthy", "untreated", "baseline")
-    treatment_keys <- c("tg", "transgenic", "treated", "treatment", "case", "disease", "diseased", "ko", "knockout", "mutant", "mut", "test")
-
-    control_idx <- which(keys %in% control_keys)
-    treatment_idx <- which(keys %in% treatment_keys)
-
-    if (length(control_idx) > 0 && length(treatment_idx) > 0) {
-      first_control <- control_idx[1]
-      first_treatment <- treatment_idx[treatment_idx != first_control][1]
-      if (!is.na(first_treatment)) {
-        return(c(groups[first_control], groups[first_treatment]))
-      }
-    }
-
-    if (length(control_idx) > 0) {
-      first_control <- control_idx[1]
-      first_other <- setdiff(seq_along(groups), first_control)[1]
-      return(c(groups[first_control], groups[first_other]))
-    }
-
-    if (length(treatment_idx) > 0) {
-      first_treatment <- treatment_idx[1]
-      first_other <- setdiff(seq_along(groups), first_treatment)[1]
-      return(c(groups[first_other], groups[first_treatment]))
-    }
-
-    groups[seq_len(min(2, length(groups)))]
-  }
-
-  format_group_suggestion <- function(groups) {
-    suggested <- suggest_control_test_groups(groups)
-    if (length(suggested) < 2) {
-      return("")
-    }
-    paste(suggested[1:2], collapse = ", ")
-  }
-
-  default_allowed_groups_value <- function() {
-    model_groups <- metadata_allowed_groups_by_model()
-    if (!is.null(model_groups) && length(model_groups) > 0) {
-      inferred <- format_group_suggestion(
-        unique(trimws(unlist(strsplit(as.character(model_groups), ",", fixed = TRUE), use.names = FALSE)))
-      )
-      if (nzchar(inferred)) {
-        return(inferred)
-      }
-    }
-
-    detected <- format_group_suggestion(get_detected_metadata_groups())
-    if (nzchar(detected)) {
-      return(detected)
-    }
-
-    paste(
-      setting_display_value(initial_settings_text, "comparison_group_control", default = "WT"),
-      setting_display_value(initial_settings_text, "comparison_group_treatment", default = "TG"),
-      sep = ", "
+  output_level_enabled <- function() {
+    normalize_output_level(
+      input[[setting_input_id("output_level")]],
+      legacy_minimal = FALSE
     )
   }
 
-  allowed_groups_hint_text <- function(value) {
-    raw <- safe_trimws(value)
-    if (!nzchar(raw)) {
-      return("")
-    }
+  # `replace_or_append()` moved to pipeline/R/03_helpers_io_log.R for reuse.
 
-    if (!grepl(",", raw, fixed = TRUE)) {
-      return("Missing comma: separate the control and test group names with a comma, for example WT, TG.")
-    }
-
-    parsed <- parse_allowed_groups(raw)
-    if (length(parsed) < 2) {
-      return("Please provide two group names in the order control, test.")
-    }
-
-    ""
-  }
-
-  allowed_groups_missing_comma <- function(value) {
-    raw <- safe_trimws(value)
-    nzchar(raw) && !grepl(",", raw, fixed = TRUE)
-  }
-
-  make_output_subdir_from_data_file <- function(file_name) {
-    stem <- tools::file_path_sans_ext(basename(file_name))
-    stem <- gsub("[^A-Za-z0-9._-]+", "_", stem)
-    stem <- gsub("^_+|_+$", "", stem)
-
-    if (!nzchar(stem)) {
-      stem <- format(Sys.time(), "run_%Y%m%d_%H%M%S")
-    }
-
-    file.path("output", stem)
-  }
 
   metadata_column_mapping <- function() {
     list(
@@ -812,112 +328,84 @@ server <- function(input, output, session) {
     )
   }
 
-  sanitize_input_id_fragment <- function(x) {
-    x <- safe_trimws(x)
-    x <- gsub("[^A-Za-z0-9]+", "_", x)
-    x <- gsub("^_+|_+$", "", x)
-    if (!nzchar(x)) {
-      x <- "model"
-    }
-    x
-  }
-
   metadata_model_groups_input_id <- function(model_name) {
     paste0("metadata_model_groups_", sanitize_input_id_fragment(model_name))
   }
 
-  get_detected_metadata_models <- function() {
-    md_path <- resolve_input_file("metadata", allow_config_fallback = FALSE)
-    if (!is_valid_file_path(md_path)) {
-      return(character(0))
+  metadata_groups_text_for_model <- function(model_name, model_groups, fallback = input$allowed_metadata_groups) {
+    detected_groups <- model_groups[[model_name]]
+    detected_groups <- trimws(as.character(detected_groups))
+    detected_groups <- detected_groups[!is.na(detected_groups) & nzchar(detected_groups)]
+    detected_groups <- detected_groups[!is_missing_like(detected_groups)]
+    detected_groups <- detected_groups[!(toupper(detected_groups) %in% metadata_qc_group_aliases())]
+    detected_groups <- unique(detected_groups)
+
+    if (length(detected_groups) >= 2) {
+      fallback_groups <- parse_allowed_groups(fallback)
+      fallback_groups <- fallback_groups[nzchar(fallback_groups)]
+      if (length(fallback_groups) > 0) {
+        detected_norm <- toupper(detected_groups)
+        fallback_present <- fallback_groups[toupper(fallback_groups) %in% detected_norm]
+        remaining <- detected_groups[!(detected_norm %in% toupper(fallback_present))]
+        detected_groups <- unique(c(fallback_present, remaining))
+      }
+
+      return(paste(detected_groups, collapse = ", "))
     }
 
-    mapping <- metadata_column_mapping()
-    md <- tryCatch(
-      read_metadata_with_mapping(md_path, mapping),
-      error = function(e) NULL
-    )
-
-    if (is.null(md) || !("model" %in% names(md))) {
-      return(character(0))
-    }
-
-    models <- unique(trimws(as.character(md$model)))
-    models <- models[!is.na(models) & nzchar(models)]
-    models <- models[!toupper(models) %in% c("NA", "N/A", "NULL")]
-    sort(models)
+    safe_trimws(fallback)
   }
 
-  get_detected_metadata_groups <- function() {
-    md_path <- resolve_input_file("metadata", allow_config_fallback = FALSE)
-    if (!is_valid_file_path(md_path)) {
-      return(character(0))
-    }
-
-    mapping <- metadata_column_mapping()
-    md <- tryCatch(
-      read_metadata_with_mapping(md_path, mapping),
-      error = function(e) NULL
-    )
-
-    if (is.null(md) || !("group" %in% names(md))) {
-      return(character(0))
-    }
-
-    groups <- trimws(as.character(md$group))
-    groups <- groups[!is.na(groups) & nzchar(groups) & !is_missing_like(groups)]
-    unique(groups)
+  get_detected_metadata_models <- function() {
+    md_path <- resolve_input_file("metadata")
+    detect_metadata_models(read_metadata_for_app(md_path, metadata_column_mapping()))
   }
 
   get_detected_metadata_groups_by_model <- function() {
-    md_path <- resolve_input_file("metadata", allow_config_fallback = FALSE)
-    if (!is_valid_file_path(md_path)) {
-      return(list())
-    }
-
-    mapping <- metadata_column_mapping()
-    md <- tryCatch(
-      read_metadata_with_mapping(md_path, mapping),
-      error = function(e) NULL
-    )
-
-    if (is.null(md) || !("model" %in% names(md)) || !("group" %in% names(md))) {
-      return(list())
-    }
-
-    md$model <- trimws(as.character(md$model))
-    md$group <- trimws(as.character(md$group))
-
-    keep <- !is.na(md$model) & nzchar(md$model) & !is_missing_like(md$model)
-    md <- md[keep, , drop = FALSE]
-
-    if (nrow(md) == 0) {
-      return(list())
-    }
-
-    split_groups <- split(md$group, md$model)
-    lapply(split_groups, function(values) {
-      values <- unique(values[!is.na(values) & nzchar(values) & !is_missing_like(values)])
-      values
-    })
+    md_path <- resolve_input_file("metadata")
+    detect_metadata_groups_by_model(read_metadata_for_app(md_path, metadata_column_mapping()))
   }
 
+  get_detected_metadata_groups <- function() {
+    md_path <- resolve_input_file("metadata")
+    detect_metadata_groups(read_metadata_for_app(md_path, metadata_column_mapping()))
+  }
+
+  output$allowed_metadata_groups_ui <- renderUI({
+    detected_groups <- get_detected_metadata_groups()
+    current_groups <- isolate(parse_allowed_groups(input$allowed_metadata_groups))
+    selected_groups <- current_groups
+    if (length(selected_groups) == 0) {
+      selected_groups <- detected_groups
+    }
+
+    selectizeInput(
+      "allowed_metadata_groups",
+      "Allowed metadata groups",
+      choices = unique(c(selected_groups, detected_groups)),
+      selected = selected_groups,
+      multiple = TRUE,
+      options = list(
+        create = TRUE,
+        persist = TRUE,
+        plugins = list("remove_button", "drag_drop"),
+        placeholder = "Choose groups (control first, test second)"
+      )
+    )
+  })
+
   metadata_allowed_groups_by_model <- function() {
+    if (!isTRUE(input$manual_metadata_cols)) {
+      return(setNames(character(0), character(0)))
+    }
+
     models <- get_detected_metadata_models()
     if (length(models) == 0) {
       return(setNames(character(0), character(0)))
     }
 
-    detected_groups_by_model <- get_detected_metadata_groups_by_model()
-
     alias_values <- vapply(models, function(model_name) {
-      value <- safe_trimws(input[[metadata_model_groups_input_id(model_name)]])
-
-      if (!nzchar(value) && model_name %in% names(detected_groups_by_model)) {
-        value <- format_group_suggestion(detected_groups_by_model[[model_name]])
-      }
-
-      value
+      safe_trimws(input[[metadata_model_groups_input_id(model_name)]])
     }, character(1), USE.NAMES = FALSE)
 
     names(alias_values) <- models
@@ -925,97 +413,7 @@ server <- function(input, output, session) {
     alias_values
   }
 
-  format_named_character_vector <- function(x) {
-    if (is.null(x) || length(x) == 0) {
-      return("NULL")
-    }
-
-    entries <- vapply(names(x), function(nm) {
-      paste0(dQuote(nm), " = ", dQuote(as.character(x[[nm]])))
-    }, character(1), USE.NAMES = FALSE)
-
-    paste0("c(", paste(entries, collapse = ", "), ")")
-  }
-
-  has_metadata_mapping <- function(mapping) {
-    any(vapply(mapping, nzchar, logical(1)))
-  }
-
-  metadata_mapped_rel_path <- function(uploaded_name) {
-    stem <- tools::file_path_sans_ext(basename(uploaded_name))
-    stem <- gsub("[^A-Za-z0-9._-]+", "_", stem)
-    stem <- gsub("^_+|_+$", "", stem)
-    if (!nzchar(stem)) {
-      stem <- "metadata"
-    }
-    file.path("data", paste0(stem, "_mapped.csv"))
-  }
-
-  metadata_effective_rel_path <- function(source_path = NULL, uploaded_name = NULL, mapping = metadata_column_mapping()) {
-    if (!has_metadata_mapping(mapping)) {
-      return(NULL)
-    }
-
-    source_name <- uploaded_name
-    if (!nzchar(safe_trimws(source_name))) {
-      source_name <- basename(safe_trimws(source_path))
-    }
-    if (!nzchar(safe_trimws(source_name))) {
-      source_name <- "metadata"
-    }
-
-    metadata_mapped_rel_path(source_name)
-  }
-
-  apply_metadata_mapping_to_df <- function(df, mapping) {
-    if (!has_metadata_mapping(mapping)) {
-      return(df)
-    }
-
-    actual <- names(df)
-    actual_norm <- tolower(trimws(as.character(actual)))
-
-    for (target in names(mapping)) {
-      src <- tolower(trimws(as.character(mapping[[target]])))
-      if (!nzchar(src)) {
-        next
-      }
-
-      idx <- which(actual_norm == src)
-      if (length(idx) == 0) {
-        next
-      }
-
-      names(df)[idx[1]] <- target
-      actual <- names(df)
-      actual_norm <- tolower(trimws(as.character(actual)))
-    }
-
-    df
-  }
-
-  read_metadata_with_mapping <- function(path, mapping = metadata_column_mapping()) {
-    md <- safe_read_table(path)
-    apply_metadata_mapping_to_df(md, mapping)
-  }
-
-  persist_metadata_mapping <- function(source_path, uploaded_name = NULL, mapping = metadata_column_mapping()) {
-    mapped_rel <- metadata_effective_rel_path(
-      source_path = source_path,
-      uploaded_name = uploaded_name,
-      mapping = mapping
-    )
-
-    if (is.null(mapped_rel)) {
-      return(NULL)
-    }
-
-    md <- read_metadata_with_mapping(source_path, mapping)
-    utils::write.csv(md, file.path(project_root, mapped_rel), row.names = FALSE, na = "")
-    mapped_rel
-  }
-
-  resolve_input_path <- function(uploaded, external_path, kind, optional = FALSE) {
+  resolve_input_path <- function(uploaded, external_path, kind) {
     if (!is.null(uploaded)) {
       return(file.path("data", basename(uploaded$name)))
     }
@@ -1025,13 +423,11 @@ server <- function(input, output, session) {
       return(ext)
     }
 
-    if (!isTRUE(optional)) {
-      status_message(paste(
-        "No",
-        kind,
-        "path was provided. Keep existing config value or provide one."
-      ))
-    }
+    status_message(paste(
+      "No",
+      kind,
+      "path was provided. Keep existing config value or provide one."
+    ))
     NULL
   }
 
@@ -1074,7 +470,7 @@ server <- function(input, output, session) {
     if (!is.null(input$injection_order_file)) {
       file.copy(
         input$injection_order_file$datapath,
-        file.path(project_root, "data", basename(input$injection_order_file$name)),
+        file.path(project_root, "data", "Input Files.xlsx"),
         overwrite = TRUE
       )
     }
@@ -1094,28 +490,64 @@ server <- function(input, output, session) {
 
   build_quick_config <- function(current_text) {
     cfg <- build_settings_builder_config(current_text)
-    allowed_groups <- parse_allowed_groups(default_allowed_groups_value())
-    duplicate_strategy_effective <- setting_input_text("duplicate_name_strategy", default = "collapse_best_qc_rsd")
+    allowed_groups <- parse_allowed_groups(input$allowed_metadata_groups)
+    duplicate_strategy_effective <- safe_trimws(input[[setting_input_id("duplicate_name_strategy")]])
     if (!nzchar(duplicate_strategy_effective)) {
       duplicate_strategy_effective <- "collapse_best_qc_rsd"
     }
-    run_metrics_effective <- setting_input_text("run_metrics", default = "FDR_and_p_value")
-    statistical_test_effective <- setting_input_text("statistical_test_type", default = "student")
-    test_is_paired_effective <- identical(toupper(setting_input_text("test_is_paired", default = "FALSE")), "TRUE")
-    minimal_output_effective <- setting_input_logical("minimal_output", default = FALSE)
 
-    cfg <- replace_or_append(cfg, "output_dir", dQuote(input$output_dir))
-    cfg <- replace_or_append(cfg, "use_weight_normalization", if (isTRUE(input$use_weight_normalization)) "TRUE" else "FALSE")
-    normalization_mode_effective <- setting_input_text("normalization_mode", default = "none")
-    if (!normalization_mode_effective %in% c("none", "PQN", "QC_LOESS")) {
-      normalization_mode_effective <- "none"
+    output_dir_quick <- sanitize_output_dir_path(input$output_dir)
+    cfg <- replace_or_append(cfg, "output_dir", paste0('"', output_dir_quick, '"'))
+    normalization_mode_quick <- input[[setting_input_id("normalization_mode")]]
+    if (is.null(normalization_mode_quick) || !nzchar(safe_trimws(normalization_mode_quick))) {
+      normalization_mode_quick <- extract_config_value(cfg, "normalization_mode")
     }
-    cfg <- replace_or_append(cfg, "normalization_mode", dQuote(normalization_mode_effective))
+    normalization_mode_quick_check <- normalize_normalization_mode(normalization_mode_quick, default = NULL)
+    if (is.null(normalization_mode_quick) || !normalization_mode_quick_check %in% c("qc_loess", "cyclic_loess", "qcrsc", "weight", "none", "pqn_qc", "pqn_sample")) {
+      normalization_mode_quick <- "qcrsc"
+    }
+
+    pca_scaling_quick <- safe_trimws(input[[setting_input_id("pca_scaling")]])
+    if (!nzchar(pca_scaling_quick)) {
+      pca_scaling_quick <- "pareto"
+    }
+    heatmap_scale_quick <- safe_trimws(input[[setting_input_id("heatmap_scale_method")]])
+    if (!nzchar(heatmap_scale_quick)) {
+      heatmap_scale_quick <- "pareto"
+    }
+    normalization_mode_quick <- normalize_normalization_mode(normalization_mode_quick)
+    weight_normalization_effective <- isTRUE(input$use_weight_normalization)
+    if (identical(normalization_mode_quick, "weight")) {
+      normalization_mode_quick <- "none"
+    }
+    if (identical(normalization_mode_quick, "none") && isTRUE(weight_normalization_effective)) {
+      normalization_mode_quick <- "weight"
+    }
+
+    cfg <- replace_or_append(cfg, "normalization_mode", dQuote(normalization_mode_quick))
+    cfg <- replace_or_append(cfg, "use_weight_normalization", if (isTRUE(weight_normalization_effective)) "TRUE" else "FALSE")
+    cfg <- apply_active_variant_config(
+      cfg,
+      input[[setting_input_id("active_variant")]],
+      input[[setting_input_id("rsd_thresholds")]]
+    )
+    low_variance_quick <- safe_trimws(input[[setting_input_id("low_variance_filter_method")]])
+    if (!nzchar(low_variance_quick) || !low_variance_quick %in% c("iqr", "none")) {
+      low_variance_quick <- "none"
+    }
+    cfg <- replace_or_append(cfg, "low_variance_filter_method", dQuote(low_variance_quick))
+    cfg <- replace_or_append(cfg, "pca_scaling", dQuote(pca_scaling_quick))
+    cfg <- replace_or_append(cfg, "heatmap_scale_method", dQuote(heatmap_scale_quick))
     cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(duplicate_strategy_effective))
+    cfg <- replace_or_append(cfg, "p_value_cutoff", setting_value_numeric(input[[setting_input_id("p_value_cutoff")]], default = 0.05))
+    cfg <- replace_or_append(cfg, "fdr_cutoff", setting_value_numeric(input[[setting_input_id("fdr_cutoff")]], default = 0.05))
+    run_metrics_effective <- safe_trimws(input[[setting_input_id("run_metrics")]])
+    statistical_test_effective <- safe_trimws(input[[setting_input_id("statistical_test_type")]])
+    paired_effective <- identical(as.character(input[[setting_input_id("test_is_paired")]])[1], "TRUE")
     cfg <- replace_or_append(cfg, "run_metrics", dQuote(run_metrics_effective))
     cfg <- replace_or_append(cfg, "heatmap_rank_metrics", dQuote(run_metrics_effective))
     cfg <- replace_or_append(cfg, "statistical_test_type", dQuote(statistical_test_effective))
-    cfg <- replace_or_append(cfg, "test_is_paired", if (isTRUE(test_is_paired_effective)) "TRUE" else "FALSE")
+    cfg <- replace_or_append(cfg, "test_is_paired", if (paired_effective) "TRUE" else "FALSE")
     # Derive p-value correction method from run_metrics selection so that
     # `run_metrics` becomes the primary choice for significance metric.
     # If the user selected any option including "FDR", default correction is "FDR" (BH),
@@ -1126,8 +558,7 @@ server <- function(input, output, session) {
       "raw"
     }
     cfg <- replace_or_append(cfg, "pvalue_correction_method", dQuote(derived_pvalue_correction))
-    minimal_flag <- if (isTRUE(minimal_output_effective)) "TRUE" else "FALSE"
-    cfg <- replace_or_append(cfg, "minimal_output", minimal_flag)
+    cfg <- replace_or_append(cfg, "output_level", dQuote(output_level_enabled()))
     cfg <- replace_or_append(cfg, "use_reference_file", if (isTRUE(input$use_reference_file)) "TRUE" else "FALSE")
     cfg <- replace_or_append(cfg, "reference_col_metabolite", dQuote(safe_trimws(input$reference_col_metabolite)))
     cfg <- replace_or_append(cfg, "reference_col_ref_ion", dQuote(safe_trimws(input$reference_col_ref_ion)))
@@ -1154,12 +585,6 @@ server <- function(input, output, session) {
 
     data_path <- resolve_input_path(input$data_file, input$external_data_path, "data")
     metadata_path <- resolve_input_path(input$metadata_file, input$external_metadata_path, "metadata")
-    injection_order_path <- resolve_input_path(
-      input$injection_order_file,
-      input$existing_injection_order_path,
-      "injection order",
-      optional = TRUE
-    )
     reference_path <- resolve_input_path(input$reference_file, input$external_reference_path, "reference")
 
     if (!is.null(data_path)) {
@@ -1180,17 +605,6 @@ server <- function(input, output, session) {
       cfg <- replace_or_append(cfg, "metadata_path", dQuote(metadata_path_cfg))
     }
 
-    normalization_mode_effective <- setting_input_text("normalization_mode", default = "none")
-    if (identical(toupper(normalization_mode_effective), "QC_LOESS")) {
-      cfg <- replace_or_append(
-        cfg,
-        "injection_order_path",
-        dQuote(if (!is.null(injection_order_path)) injection_order_path else "")
-      )
-    } else {
-      cfg <- replace_or_append(cfg, "injection_order_path", dQuote(""))
-    }
-
     if (isTRUE(input$use_reference_file) && !is.null(reference_path)) {
       cfg <- replace_or_append(cfg, "reference_path", dQuote(reference_path))
     } else if (!isTRUE(input$use_reference_file)) {
@@ -1200,143 +614,43 @@ server <- function(input, output, session) {
     cfg
   }
 
+  normalization_requires_injection_order <- function(config_text) {
+    mode <- safe_trimws(extract_config_value(config_text, "normalization_mode"))
+    normalize_normalization_mode(mode, default = NULL) %in% c("qc_loess", "qcrsc")
+  }
+
+  has_injection_order_file_for_run <- function() {
+    if (!is.null(input$injection_order_file)) {
+      return(TRUE)
+    }
+
+    candidate_paths <- unique(c(
+      file.path(project_root, "data", "Input Files.xlsx"),
+      list.files(file.path(project_root, "data"), pattern = "^input_order.*\\.xlsx$", full.names = TRUE, ignore.case = TRUE)
+    ))
+    candidate_paths <- candidate_paths[file.exists(candidate_paths)]
+
+    any(vapply(candidate_paths, function(path) {
+      input_files_ref <- read_input_files_reference(path)
+      !is.null(input_files_ref) && nrow(input_files_ref) > 0
+    }, logical(1)))
+  }
+
   normalized_output_dir <- function() {
-    out <- safe_trimws(input$output_dir)
+    out <- sanitize_output_dir_path(input$output_dir)
     if (!nzchar(out)) {
       return("output")
     }
     out
   }
 
-  build_expected_output_manifest <- function(minimal_mode = setting_input_logical("minimal_output", default = FALSE)) {
+  build_expected_output_manifest <- function(output_level = output_level_enabled()) {
     out_dir <- normalized_output_dir()
-    cfg <- input$config_text
-    strategy <- extract_config_value(cfg, "duplicate_name_strategy")
-    strategy <- safe_trimws(if (is.null(strategy)) "" else strategy)
-
-    volcano_enabled <- config_flag_value(cfg, "make_volcano_plots", default = TRUE)
-    heatmap_all <- config_flag_value(cfg, "make_heatmap_by_model", default = TRUE)
-    heatmap_sex <- config_flag_value(cfg, "make_heatmap_by_model_sex", default = TRUE)
-    sig_heatmap_all <- config_flag_value(cfg, "make_sig_heatmap_by_model", default = TRUE)
-    sig_heatmap_sex <- config_flag_value(cfg, "make_sig_heatmap_by_model_sex", default = TRUE)
-    sig_heatmap_fvsm <- config_flag_value(cfg, "make_sig_heatmap_FvsM_within_group", default = TRUE)
-    sig_metabolites_txt <- config_flag_value(cfg, "save_sig_metabolites_txt_per_model", default = TRUE)
-
-    if (!nzchar(strategy)) {
-      strategy <- "collapse_best_qc_rsd"
-    }
-
-    core_files <- c(
-      file.path(out_dir, "PIPELINE_LOG.txt"),
-      file.path(out_dir, "global", "audits_global", "filter_summary.csv"),
-      file.path(out_dir, "global", "audits_global", "missing_exclusion_audit.csv"),
-      file.path(out_dir, "global", "audits_global", "presence_filter_audit.csv"),
-      file.path(out_dir, "global", "audits_global", "known_filter_audit.csv"),
-      file.path(out_dir, "global", "audits_global", "qc_rsd_values_pre_variants.csv"),
-      file.path(out_dir, "global", "audits_global", "low_variance_iqr_audit_ACTIVE.csv"),
-      file.path(out_dir, "global", "audits_global", paste0("duplicate_name_audit_", strategy, ".csv")),
-      file.path(out_dir, "global", "exports_global", "02_featureID_to_display_name_map.csv")
-    )
-
-    if (identical(strategy, "reference_or_best_qc_rsd")) {
-      core_files <- c(
-        core_files,
-        file.path(
-          out_dir,
-          "global",
-          "audits_global",
-          "duplicate_name_reference_summary_reference_or_best_qc_rsd.csv"
-        )
-      )
-    }
-
-    if (!isTRUE(minimal_mode)) {
-      core_files <- c(
-        core_files,
-        file.path(out_dir, "global", "exports_global", "06_pqn_factors_weight_then_PQN.csv"),
-        file.path(out_dir, "global", "exports_global", "10_MATRIX_post_<ACTIVE_VARIANT>_postRSD_preLowVar_preDup_ALL.csv"),
-        file.path(out_dir, "global", "exports_global", "10_TABLE_post_<ACTIVE_VARIANT>_postRSD_preLowVar_preDup_ALL_NAMED.csv")
-      )
-    }
-
-    optional_files <- character(0)
-
-    optional_files <- c(
-      optional_files,
-      file.path(out_dir, "<MODEL>", "exports", "stats", "*.xlsx")
-    )
-
-    if (isTRUE(sig_metabolites_txt)) {
-      optional_files <- c(
-        optional_files,
-        file.path(out_dir, "<MODEL>", "exports", "stats", "significant_metabolites", "p_value", "*.txt"),
-        file.path(out_dir, "<MODEL>", "exports", "stats", "significant_metabolites", "FDR", "*.txt")
-      )
-    }
-
-    if (isTRUE(volcano_enabled)) {
-      optional_files <- c(
-        optional_files,
-        file.path(out_dir, "<MODEL>", "plots", "volcano", "*.png")
-      )
-    }
-
-    if (isTRUE(heatmap_all)) {
-      optional_files <- c(
-        optional_files,
-        file.path(out_dir, "<MODEL>", "plots", "heatmap", "*.png")
-      )
-    }
-
-    if (isTRUE(heatmap_sex)) {
-      optional_files <- c(
-        optional_files,
-        file.path(out_dir, "<MODEL>", "plots", "heatmap", "*.png")
-      )
-    }
-
-    if (isTRUE(sig_heatmap_all)) {
-      optional_files <- c(
-        optional_files,
-        file.path(out_dir, "<MODEL>", "plots", "heatmap_significant", "*.png")
-      )
-    }
-
-    if (isTRUE(sig_heatmap_sex)) {
-      optional_files <- c(
-        optional_files,
-        file.path(out_dir, "<MODEL>", "plots", "heatmap_significant", "*.png")
-      )
-    }
-
-    if (isTRUE(sig_heatmap_fvsm)) {
-      optional_files <- c(
-        optional_files,
-        file.path(out_dir, "<MODEL>", "plots", "heatmap_significant", "*.png")
-      )
-    }
-
-    optional_files <- c(
-      optional_files,
-      file.path(out_dir, "<MODEL>", "plots", "pca", "*.png"),
-      file.path(out_dir, "<MODEL>", "exports", "metaboanalyst", "*.csv")
-    )
-
-    list(
-      out_dir = out_dir,
-      core_files = unique(core_files),
-      optional_files = unique(optional_files)
-    )
-  }
-
-  render_manifest_list <- function(items) {
-    tags$ul(lapply(items, function(item) tags$li(item)))
+    cfg <- build_quick_config(current_config_text())
+    build_expected_output_manifest_from_config(cfg, out_dir, output_level)
   }
 
   launch_pipeline <- function() {
-    results_cleared(FALSE)
-    gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
-
     rscript_cmd <- file.path(R.home("bin"), "Rscript")
     if (.Platform$OS.type == "windows") {
       rscript_cmd <- paste0(rscript_cmd, ".exe")
@@ -1349,7 +663,11 @@ server <- function(input, output, session) {
 
     log_file <- tempfile(pattern = "pipeline_run_", fileext = ".log")
     output_log_file <- file.path(resolve_output_dir_abs(), "PIPELINE_LOG.txt")
-    pipeline_log_text("Starting pipeline...")
+    pipeline_log_text(paste0(
+      "Starting pipeline at ",
+      format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+      "...\nWaiting for Rscript output."
+    ))
 
     if (requireNamespace("processx", quietly = TRUE)) {
       proc <- tryCatch(
@@ -1373,6 +691,8 @@ server <- function(input, output, session) {
       process_state$log_file <- log_file
       process_state$pipeline_log_file <- output_log_file
       process_state$running <- TRUE
+      process_state$started_at <- Sys.time()
+      process_state$pid <- tryCatch(proc$get_pid(), error = function(e) NULL)
       status_message("Pipeline is running in background. Open 'Pipeline Log' tab for live output.")
     } else {
       status_message("Package 'processx' not installed. Running pipeline synchronously without live streaming.")
@@ -1392,9 +712,9 @@ server <- function(input, output, session) {
       )
 
       if (file.exists(output_log_file)) {
-        pipeline_log_text(safe_read_file(output_log_file))
+        pipeline_log_text(read_log_preview(output_log_file))
       } else if (file.exists(log_file)) {
-        pipeline_log_text(safe_read_file(log_file))
+        pipeline_log_text(read_log_preview(log_file))
       } else {
         pipeline_log_text("No log file generated.")
       }
@@ -1437,37 +757,46 @@ server <- function(input, output, session) {
 
   clear_all_inputs <- function() {
     clearing_inputs(TRUE)
-    on.exit(
-      {
-        clearing_inputs(FALSE)
-      },
-      add = TRUE
-    )
+    initializing(TRUE)
+    on.exit({
+      clearing_inputs(FALSE)
+      initializing(FALSE)
+    }, add = TRUE)
+    if (isTRUE(process_state$running) && !is.null(process_state$proc)) {
+      try({
+        if (process_state$proc$is_alive()) {
+          process_state$proc$kill()
+        }
+      }, silent = TRUE)
+    }
     reset_common_inputs()
-    results_cleared(TRUE)
-    reset_settings_form_inputs()
+    package_status("")
+    refresh_package_status()
     updateTextInput(session, "external_data_path", value = "")
     updateTextInput(session, "external_metadata_path", value = "")
     updateTextInput(session, "external_reference_path", value = "")
-    cfg <- if (file.exists(active_config_path)) {
-      safe_read_file(active_config_path)
-    } else {
-      read_initial_config()
-    }
+    cfg <- read_initial_config()
     cfg <- replace_or_append(cfg, "cd_file_path", dQuote(""))
     cfg <- replace_or_append(cfg, "metadata_path", dQuote(""))
     cfg <- replace_or_append(cfg, "reference_path", dQuote(""))
     updateTextAreaInput(session, "config_text", value = cfg)
     gallery_state$dir <- NULL
     gallery_state$prefix <- NULL
-    gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
+    selected_result_image(NULL)
+    action_confirm$ask_run <- TRUE
+    action_confirm$ask_stop <- TRUE
+    action_confirm$pending_run_cfg <- NULL
     process_state$log_file <- NULL
     process_state$pipeline_log_file <- NULL
     process_state$proc <- NULL
     process_state$running <- FALSE
+    process_state$started_at <- NULL
+    process_state$pid <- NULL
     session_started_at <<- Sys.time()
+    inputs_cleared_timestamp(session_started_at)
+    bump_results_gallery()
     shinyjs::runjs("window.location.hash = '#data'; setTimeout(function() { window.location.hash = '#data'; }, 100);")
-    status_message("All inputs cleared. Ready for a new analysis.")
+    status_message("App reset to startup defaults. Ready for a new analysis.")
   }
 
   reset_metadata_columns <- function() {
@@ -1485,16 +814,8 @@ server <- function(input, output, session) {
     updateTextInput(session, "reference_col_rt", value = "")
   }
 
-  is_valid_file_path <- function(path) {
-    !is.null(path) && nzchar(as.character(path)) && file.exists(as.character(path))
-  }
-
-  is_valid_image_path <- function(path) {
-    !is.null(path) && nzchar(as.character(path)) && file.exists(as.character(path))
-  }
-
   resolve_output_dir_abs <- function() {
-    out <- trimws(input$output_dir)
+    out <- strip_outer_quotes(input$output_dir)
     if (!nzchar(out)) {
       out <- "output"
     }
@@ -1506,6 +827,7 @@ server <- function(input, output, session) {
     normalizePath(file.path(project_root, out), winslash = "/", mustWork = FALSE)
   }
 
+  # Resolve uploaded, external, mapped, or config-backed input paths in priority order.
   resolve_input_file <- function(
     kind = c("data", "metadata", "reference"),
     prefer_mapped = TRUE,
@@ -1533,6 +855,7 @@ server <- function(input, output, session) {
 
     clear_ts <- inputs_cleared_timestamp()
 
+    # Ignore stale uploaded temp files from before the latest Clear/reset.
     is_valid_current_file <- function(file_path) {
       if (is.null(file_path) || !file.exists(file_path)) {
         return(FALSE)
@@ -1613,10 +936,6 @@ server <- function(input, output, session) {
   }
 
   get_result_image_files <- function() {
-    if (isTRUE(results_cleared())) {
-      return(character(0))
-    }
-
     out_dir <- resolve_output_dir_abs()
 
     if (!dir.exists(out_dir)) {
@@ -1635,139 +954,35 @@ server <- function(input, output, session) {
       return(character(0))
     }
 
-    files[order(tolower(basename(files)))]
-  }
-
-  read_result_csv <- function(path) {
-    if (!file.exists(path)) {
-      return(NULL)
+    info <- tryCatch(file.info(files), error = function(e) NULL)
+    if (is.null(info) || is.null(info$mtime)) {
+      return(character(0))
     }
 
-    tryCatch(
-      utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE),
-      error = function(e) NULL
-    )
-  }
-
-  format_summary_number <- function(value, digits = 2) {
-    if (is.null(value) || length(value) == 0 || all(is.na(value))) {
-      return("NA")
+    mtime <- info$mtime
+    if (length(mtime) != length(files)) {
+      return(character(0))
     }
 
-    format(round(as.numeric(value)[1], digits), trim = TRUE, scientific = FALSE)
-  }
+    valid_mtime <- !is.na(mtime)
+    files <- files[valid_mtime]
+    mtime <- mtime[valid_mtime]
 
-  format_count_percent <- function(count, total, digits = 1) {
-    count <- as.numeric(count)[1]
-    total <- as.numeric(total)[1]
-
-    if (is.na(count) || is.na(total) || total <= 0) {
-      return("NA")
+    if (length(files) == 0) {
+      return(character(0))
     }
 
-    paste0(
-      format_summary_number(count, digits = 0),
-      " / ",
-      format_summary_number(total, digits = 0),
-      " (",
-      format_summary_number(100 * count / total, digits = digits),
-      "%)"
-    )
-  }
+    clear_ts <- inputs_cleared_timestamp()
+    min_time <- if (!is.null(clear_ts)) clear_ts - 1 else session_started_at - 2
+    keep_current <- mtime >= min_time
+    files <- files[keep_current]
+    mtime <- mtime[keep_current]
 
-  current_normalization_label <- function() {
-    raw_mode <- safe_trimws(input[[setting_input_id("normalization_mode")]])
-
-    if (!nzchar(raw_mode)) {
-      raw_mode <- safe_trimws(input$normalization_mode)
+    if (length(files) == 0) {
+      return(character(0))
     }
 
-    if (!nzchar(raw_mode)) {
-      raw_mode <- setting_display_value(input$config_text, "normalization_mode", default = "none")
-    }
-
-    mode <- toupper(safe_trimws(raw_mode))
-    if (mode %in% c("LOESS", "QC LOESS", "QC-LOESS")) {
-      return("QC_LOESS")
-    }
-    if (mode %in% c("PQN", "NONE")) {
-      return(mode)
-    }
-
-    raw_mode
-  }
-
-  normalization_summary_items <- function(out_dir) {
-    mode <- current_normalization_label()
-    weight_enabled <- if (!is.null(input$use_weight_normalization)) {
-      isTRUE(input$use_weight_normalization)
-    } else {
-      isTRUE(setting_display_logical(input$config_text, "use_weight_normalization", default = FALSE))
-    }
-
-    items <- list(
-      tags$li(paste("Output directory:", out_dir)),
-      tags$li(paste("Weight normalization:", if (weight_enabled) "enabled" else "disabled")),
-      tags$li(paste("Main normalization:", mode))
-    )
-
-    exports_dir <- file.path(out_dir, "global", "exports_global")
-
-    if (identical(mode, "PQN")) {
-      pqn <- read_result_csv(file.path(exports_dir, "06_pqn_factors_weight_then_PQN.csv"))
-
-      if (!is.null(pqn) && nrow(pqn) > 0) {
-        factor_col <- intersect(c("pqn_factor_used_for_norm", "pqn_factor"), names(pqn))
-        valid_col <- intersect(c("valid_pqn", "valid"), names(pqn))
-        valid_n <- if (length(valid_col) > 0) {
-          sum(toupper(as.character(pqn[[valid_col[1]]])) %in% c("TRUE", "1", "YES"), na.rm = TRUE)
-        } else {
-          nrow(pqn)
-        }
-        median_factor <- if (length(factor_col) > 0) {
-          stats::median(as.numeric(pqn[[factor_col[1]]]), na.rm = TRUE)
-        } else {
-          NA_real_
-        }
-
-        items <- c(items, list(
-          tags$li(paste("PQN samples audited:", nrow(pqn))),
-          tags$li(paste("Valid PQN factors:", valid_n)),
-          tags$li(paste("Median PQN factor:", format_summary_number(median_factor)))
-        ))
-      } else {
-        items <- c(items, list(tags$li("PQN audit file not found for the latest output.")))
-      }
-    } else if (identical(mode, "QC_LOESS")) {
-      loess_audit <- read_result_csv(file.path(exports_dir, "06_loess_qc_correction_audit_weight_then_LOESS.csv"))
-
-      if (!is.null(loess_audit) && nrow(loess_audit) > 0) {
-        corrected_col <- intersect(c("corrected", "loess_corrected"), names(loess_audit))
-        qc_points_col <- intersect(c("qc_points_used", "n_qc_points"), names(loess_audit))
-        corrected_n <- if (length(corrected_col) > 0) {
-          sum(toupper(as.character(loess_audit[[corrected_col[1]]])) %in% c("TRUE", "1", "YES"), na.rm = TRUE)
-        } else {
-          NA_integer_
-        }
-        median_qc_points <- if (length(qc_points_col) > 0) {
-          stats::median(as.numeric(loess_audit[[qc_points_col[1]]]), na.rm = TRUE)
-        } else {
-          NA_real_
-        }
-
-        items <- c(items, list(
-          tags$li(paste("QC-LOESS features audited:", nrow(loess_audit))),
-          tags$li(paste("Features corrected:", ifelse(is.na(corrected_n), "NA", corrected_n))),
-          tags$li(paste("Median QC points per feature:", format_summary_number(median_qc_points, digits = 0)))
-        ))
-      } else {
-        items <- c(items, list(tags$li("QC-LOESS audit file not found for the latest output.")))
-      }
-    } else if (identical(mode, "NONE")) {
-      items <- c(items, list(tags$li("No main normalization was applied after optional weight normalization.")))
-    }
-
-    items
+    files[order(mtime, tolower(basename(files)), decreasing = TRUE)]
   }
 
   ensure_results_resource_path <- function(out_dir) {
@@ -1787,12 +1002,6 @@ server <- function(input, output, session) {
     gallery_state$prefix
   }
 
-  rel_path_from_output <- function(path, out_dir) {
-    path_norm <- gsub("\\\\", "/", normalizePath(path, winslash = "/", mustWork = FALSE))
-    out_norm <- gsub("\\\\", "/", normalizePath(out_dir, winslash = "/", mustWork = FALSE))
-    sub(paste0("^", out_norm, "/?"), "", path_norm)
-  }
-
   build_result_image_src <- function(path) {
     out_dir <- resolve_output_dir_abs()
 
@@ -1806,78 +1015,33 @@ server <- function(input, output, session) {
     paste0(prefix, "/", utils::URLencode(rel, reserved = TRUE))
   }
 
-  config_flag_value <- function(text, key, default = FALSE) {
-    val <- extract_config_value(text, key)
-    if (is.null(val) || !nzchar(trimws(as.character(val)))) {
-      return(isTRUE(default))
-    }
-
-    val_norm <- toupper(trimws(as.character(val)))
-    if (val_norm %in% c("TRUE", "T", "1", "YES")) {
-      return(TRUE)
-    }
-    if (val_norm %in% c("FALSE", "F", "0", "NO")) {
-      return(FALSE)
-    }
-
-    isTRUE(default)
-  }
-
   current_config_text <- function(fallback_text = input$config_text) {
-    cfg <- fallback_text
-    if (file.exists(active_config_path)) {
-      cfg <- safe_read_file(active_config_path)
+    if (!is.null(fallback_text) && nzchar(trimws(fallback_text))) {
+      return(fallback_text)
     }
-    if (is.null(cfg) || length(cfg) == 0 || all(is.na(cfg))) {
-      cfg <- "# No settings file found in config/."
-    }
-    replace_or_append(cfg, "model_allowed_groups_by_model", "NULL")
+    read_initial_config()
   }
 
   observeEvent(TRUE,
     {
       cfg <- input$config_text
 
-      minimal_from_cfg <- config_flag_value(cfg, "minimal_output", default = FALSE)
-      if (!identical(setting_input_logical("minimal_output", default = FALSE), isTRUE(minimal_from_cfg))) {
-        minimal_output_guard$updating <- TRUE
-        updateSelectInput(session, setting_input_id("minimal_output"), selected = if (isTRUE(minimal_from_cfg)) "TRUE" else "FALSE")
-      } else {
-        minimal_output_guard$updating <- FALSE
-      }
+      output_level_from_cfg <- extract_config_value(cfg, "output_level")
+      legacy_minimal <- config_flag_value(cfg, "minimal_output", default = FALSE)
+      output_level_from_cfg <- normalize_output_level(output_level_from_cfg, legacy_minimal = legacy_minimal)
+      output_level_last_confirmed(output_level_from_cfg)
+      updateSelectInput(session, setting_input_id("output_level"), selected = output_level_from_cfg)
     },
     once = TRUE
   )
 
   observe({
-    missing_pkgs <- find_missing_packages()
-    missing_packages_state(missing_pkgs)
-
-    if (length(missing_pkgs) == 0) {
-      install_status_text("All required packages are installed.")
-    } else {
-      install_status_text(paste0(
-        "Missing packages detected (",
-        length(missing_pkgs),
-        "): ",
-        paste(missing_pkgs, collapse = ", ")
-      ))
-    }
+    refresh_package_status()
   })
 
-  observe({
-    invalidateLater(2000, session)
-
-    img_files <- get_result_image_files()
-
-    if (length(img_files) > 0) {
-      current <- selected_result_image()
-
-      if (!is_valid_image_path(current)) {
-        selected_result_image(img_files[1])
-      }
-    }
-  })
+  bump_results_gallery <- function() {
+    gallery_refresh_tick(gallery_refresh_tick() + 1L)
+  }
 
   observeEvent(input$save_settings_form, {
     cfg <- build_settings_builder_config(current_config_text())
@@ -1889,73 +1053,30 @@ server <- function(input, output, session) {
 
   observeEvent(input$data_file,
     {
-      if (is.null(input$data_file) || is.null(input$data_file$name) || !nzchar(input$data_file$name)) {
+      if (is.null(input$data_file) ||
+          is.null(input$data_file$name) ||
+          !nzchar(input$data_file$name)) {
         return()
       }
 
       suggested_output <- make_output_subdir_from_data_file(input$data_file$name)
       updateTextInput(session, "output_dir", value = suggested_output)
-      status_message(paste("Output directory auto-updated based on data file:", suggested_output))
+      status_message(paste(
+        "Output directory suggested from the data file; you can edit it before running:",
+        suggested_output
+      ))
     },
     ignoreInit = TRUE
   )
 
-  observeEvent(input[[setting_input_id("minimal_output")]],
+  observeEvent(input$output_dir,
     {
-      if (isTRUE(minimal_output_guard$updating)) {
-        minimal_output_guard$updating <- FALSE
-        return()
-      }
-
-      if (setting_input_logical("minimal_output", default = FALSE)) {
-        manifest_min <- build_expected_output_manifest(minimal_mode = TRUE)
-        manifest_full <- build_expected_output_manifest(minimal_mode = FALSE)
-        skipped_files <- setdiff(manifest_full$core_files, manifest_min$core_files)
-
-        showModal(modalDialog(
-          title = "Confirm minimal output",
-          size = "l",
-          easyClose = TRUE,
-          tags$p("Minimal output keeps selected plots and statistics. It only skips selected intermediate global exports used for audit/debug review."),
-          tags$p(tags$strong("Output directory:"), paste0(" ", manifest_min$out_dir)),
-          tags$h5("Files generated in minimal mode"),
-          render_manifest_list(manifest_min$core_files),
-          tags$h5("Files skipped when minimal mode is enabled"),
-          if (length(skipped_files) > 0) {
-            render_manifest_list(skipped_files)
-          } else {
-            tags$p("No additional core files are skipped with the current configuration.")
-          },
-          tags$p(
-            class = "small-note",
-            "Per-model plots and stats remain enabled according to your selected options."
-          ),
-          footer = tagList(
-            actionButton("cancel_minimal_output", "Cancel"),
-            actionButton("confirm_minimal_output", "Continue with minimal output", class = "btn-primary")
-          )
-        ))
-      } else {
-        set_minimal_output_status(FALSE)
-      }
-    },
-    ignoreInit = TRUE
-  )
-
-  observeEvent(input$confirm_minimal_output,
-    {
-      removeModal()
-      set_minimal_output_status(TRUE)
-    },
-    ignoreInit = TRUE
-  )
-
-  observeEvent(input$cancel_minimal_output,
-    {
-      removeModal()
-      minimal_output_guard$updating <- TRUE
-      updateSelectInput(session, setting_input_id("minimal_output"), selected = "FALSE")
-      set_minimal_output_status(FALSE)
+      output_dir_value <- sanitize_output_dir_path(input$output_dir)
+      cfg <- current_config_text()
+      cfg <- replace_or_append(cfg, "output_dir", dQuote(output_dir_value))
+      updateTextAreaInput(session, "config_text", value = cfg)
+      selected_result_image(NULL)
+      bump_results_gallery()
     },
     ignoreInit = TRUE
   )
@@ -2010,14 +1131,11 @@ server <- function(input, output, session) {
     ignoreInit = TRUE
   )
 
-  observeEvent(input[[setting_input_id("duplicate_name_strategy")]],
-    {
-      cfg <- input$config_text
-      cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(setting_input_text("duplicate_name_strategy", default = "collapse_best_qc_rsd")))
-      updateTextAreaInput(session, "config_text", value = cfg)
-    },
-    ignoreInit = TRUE
-  )
+  observeEvent(input[[setting_input_id("duplicate_name_strategy")]], {
+    cfg <- input$config_text
+    cfg <- replace_or_append(cfg, "duplicate_name_strategy", dQuote(safe_trimws(input[[setting_input_id("duplicate_name_strategy")]])))
+    updateTextAreaInput(session, "config_text", value = cfg)
+  }, ignoreInit = TRUE)
 
   observeEvent(input$manual_reference_cols,
     {
@@ -2050,17 +1168,31 @@ server <- function(input, output, session) {
   observeEvent(input$apply_metadata_cols,
     {
       mapping <- metadata_column_mapping()
-      if (!has_metadata_mapping(mapping)) {
-        status_message("No metadata mapping values were provided.")
+      model_groups <- metadata_allowed_groups_by_model()
+      allowed_groups <- parse_allowed_groups(input$allowed_metadata_groups)
+      has_group_settings <- length(model_groups) > 0 || length(allowed_groups) >= 2
+
+      if (!has_metadata_mapping(mapping) && !isTRUE(has_group_settings)) {
+        status_message("No metadata mapping or group settings were provided.")
         return()
       }
 
-      status_message("Metadata column mapping captured. It will be applied on save/run.")
+      if (has_metadata_mapping(mapping) && isTRUE(has_group_settings)) {
+        status_message("Metadata column mapping and group settings captured. They will be applied on save/run.")
+      } else if (has_metadata_mapping(mapping)) {
+        status_message("Metadata column mapping captured. It will be applied on save/run.")
+      } else {
+        status_message("Metadata group settings captured. They will be applied on save/run.")
+      }
     },
     ignoreInit = TRUE
   )
 
   output$metadata_model_alias_ui <- renderUI({
+    if (!isTRUE(input$manual_metadata_cols)) {
+      return(NULL)
+    }
+
     models <- get_detected_metadata_models()
     model_groups <- get_detected_metadata_groups_by_model()
 
@@ -2071,14 +1203,23 @@ server <- function(input, output, session) {
       ))
     }
 
+    # The global selector uses selection order to mean control -> test. Read it
+    # only while initializing the per-model fields; later clicks must not rebuild
+    # those fields and silently swap their biological meaning.
+    allowed_groups_initial <- isolate(input$allowed_metadata_groups)
+
     alias_boxes <- lapply(models, function(model_name) {
       detected_groups <- model_groups[[model_name]]
-
       detected_groups_text <- if (length(detected_groups) == 0) {
         "None detected"
       } else {
         paste(detected_groups, collapse = ", ")
       }
+      suggested_groups_text <- metadata_groups_text_for_model(
+        model_name,
+        model_groups,
+        fallback = allowed_groups_initial
+      )
 
       tags$div(
         class = "model-allowed-groups-card",
@@ -2090,19 +1231,62 @@ server <- function(input, output, session) {
         textInput(
           metadata_model_groups_input_id(model_name),
           label = "Allowed metadata groups (control first, test second)",
-          value = {
-            model_suggestion <- format_group_suggestion(detected_groups)
-            if (nzchar(model_suggestion)) model_suggestion else default_allowed_groups_value()
-          }
+          value = suggested_groups_text
         )
       )
     })
 
     tags$div(
-      class = "model-allowed-groups-list",
-      do.call(tagList, alias_boxes)
+      style = "margin-top: 10px;",
+      tags$h5("Allowed metadata groups by model"),
+      tags$p(
+        class = "small-note",
+        "Use one box per model. The first value is treated as control and the second as test."
+      ),
+      tags$div(
+        class = "model-allowed-groups-list",
+        do.call(tagList, alias_boxes)
+      )
     )
   })
+
+  observeEvent(
+    list(
+      input$metadata_file,
+      input$external_metadata_path,
+      input$metadata_col_sample,
+      input$metadata_col_weight,
+      input$metadata_col_group,
+      input$metadata_col_sex,
+      input$metadata_col_model,
+      input$manual_metadata_cols
+    ),
+    {
+      if (!isTRUE(input$manual_metadata_cols)) {
+          return()
+      }
+
+      models <- get_detected_metadata_models()
+      if (length(models) == 0) {
+        return()
+      }
+
+      model_groups <- get_detected_metadata_groups_by_model()
+      allowed_groups_current <- isolate(input$allowed_metadata_groups)
+      for (model_name in models) {
+        updateTextInput(
+          session,
+          metadata_model_groups_input_id(model_name),
+          value = metadata_groups_text_for_model(
+            model_name,
+            model_groups,
+            fallback = allowed_groups_current
+          )
+        )
+      }
+    },
+    ignoreInit = TRUE
+  )
 
   observeEvent(input$browse_output_dir, {
     if (!requireNamespace("shinyFiles", quietly = TRUE)) {
@@ -2116,7 +1300,7 @@ server <- function(input, output, session) {
 
     if (length(selected) > 0 && nzchar(selected[1])) {
       updateTextInput(session, "output_dir", value = selected[1])
-      status_message("Output directory selected from browser.")
+      status_message("Output directory selected from directory chooser.")
     }
   })
 
@@ -2124,16 +1308,6 @@ server <- function(input, output, session) {
     save_config_and_inputs(current_config_text())
     status_message("Saved config/settings.R and copied uploaded files to data/.")
   })
-
-  observeEvent(input$refresh_results_gallery,
-    {
-      results_cleared(FALSE)
-      gallery_refresh_tick(isolate(gallery_refresh_tick()) + 1)
-      selected_result_image(NULL)
-      status_message("Results gallery refreshed.")
-    },
-    ignoreInit = TRUE
-  )
 
   observeEvent(input$open_output_dir_gallery,
     {
@@ -2162,6 +1336,19 @@ server <- function(input, output, session) {
       } else {
         status_message("Could not open output directory automatically.")
       }
+    },
+    ignoreInit = TRUE
+  )
+
+  observeEvent(input$refresh_results_gallery,
+    {
+      bump_results_gallery()
+      img_files <- get_result_image_files()
+      current <- selected_result_image()
+      if (length(img_files) > 0 && !is_valid_image_path(current)) {
+        selected_result_image(img_files[1])
+      }
+      status_message("Results gallery refreshed.")
     },
     ignoreInit = TRUE
   )
@@ -2224,6 +1411,11 @@ server <- function(input, output, session) {
 
   observeEvent(input$run_pipeline, {
     updateTabsetPanel(session, "main_tabs", selected = "Pipeline Log")
+    pipeline_log_text(paste0(
+      "Run requested at ",
+      format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+      ".\nValidating inputs before starting Rscript..."
+    ))
 
     if (isTRUE(process_state$running)) {
       status_message("Pipeline is already running.")
@@ -2249,9 +1441,9 @@ server <- function(input, output, session) {
       missing_inputs <- c(missing_inputs, "Reference")
     }
 
-    if (allowed_groups_missing_comma(default_allowed_groups_value())) {
+    if (allowed_groups_missing_comma(input$allowed_metadata_groups)) {
       status_message(
-        "Metadata validation failed: please review the per-model group order. Use a comma between control and test groups."
+        "Metadata validation failed: select at least two groups (control first, then test)."
       )
       return()
     }
@@ -2262,6 +1454,11 @@ server <- function(input, output, session) {
         paste(missing_inputs, collapse = ", "),
         "."
       ))
+      pipeline_log_text(paste0(
+        "Pipeline did not start.\nMissing required input(s): ",
+        paste(missing_inputs, collapse = ", "),
+        "."
+      ))
       return()
     }
 
@@ -2269,7 +1466,7 @@ server <- function(input, output, session) {
       validate_metadata_columns(
         metadata_path_for_validation,
         metadata_mapping = metadata_column_mapping(),
-        allowed_groups = parse_allowed_groups(default_allowed_groups_value()),
+        allowed_groups = parse_allowed_groups(input$allowed_metadata_groups),
         model_allowed_groups_by_model = metadata_allowed_groups_by_model()
       ),
       error = function(e) list(ok = FALSE, message = conditionMessage(e))
@@ -2277,23 +1474,42 @@ server <- function(input, output, session) {
 
     if (!isTRUE(md_check$ok)) {
       status_message(paste("Metadata validation failed:", md_check$message))
+      pipeline_log_text(paste("Pipeline did not start.\nMetadata validation failed:", md_check$message))
       return()
     }
 
     cfg_to_run <- build_quick_config(current_config_text())
+    if (isTRUE(normalization_requires_injection_order(cfg_to_run)) && !isTRUE(has_injection_order_file_for_run())) {
+      msg <- paste(
+        "Injection order file is required for normalization_mode = qcrsc or qc_loess.",
+        "Please upload the Injection order file before running the pipeline."
+      )
+      status_message(msg)
+      pipeline_log_text(paste("Pipeline did not start.", msg, sep = "\n"))
+      return()
+    }
 
     if (isTRUE(action_confirm$ask_run)) {
       action_confirm$pending_run_cfg <- cfg_to_run
+      pipeline_log_text(paste0(
+        "Inputs validated at ",
+        format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+        ".\nWaiting for run confirmation..."
+      ))
 
-      showModal(modalDialog(
+      showModal(pipeline_modal(
         title = "Confirm run",
         size = "m",
         easyClose = TRUE,
         tags$p("You are about to start the pipeline with the current settings."),
         tags$ul(
           tags$li(paste("Output directory:", safe_trimws(input$output_dir))),
-          tags$li(paste("Minimal output:", if (setting_input_logical("minimal_output", default = FALSE)) "Enabled" else "Disabled")),
-          tags$li(paste("Use reference file:", if (isTRUE(input$use_reference_file)) "Enabled" else "Disabled"))
+          tags$li(paste("Output level:", output_level_enabled())),
+          tags$li(paste("Use reference file:", if (isTRUE(input$use_reference_file)) "Enabled" else "Disabled")),
+          tags$li(paste("Analysis mode:", safe_trimws(input$settings_comparison_mode))),
+          if (safe_trimws(input$settings_comparison_mode) %in% c("multigroup", "both")) {
+            tags$li("MULTIGROUP_GLOBAL is exploratory: no directional FC, Up/Down classification, or volcano plot.")
+          }
         ),
         checkboxInput("skip_run_confirm", "Do not ask again in this session", value = FALSE),
         footer = tagList(
@@ -2320,6 +1536,17 @@ server <- function(input, output, session) {
         cfg_to_run <- build_quick_config(current_config_text())
       }
 
+      if (isTRUE(normalization_requires_injection_order(cfg_to_run)) && !isTRUE(has_injection_order_file_for_run())) {
+        msg <- paste(
+          "Injection order file is required for normalization_mode = qcrsc or qc_loess.",
+          "Please upload the Injection order file before running the pipeline."
+        )
+        status_message(msg)
+        pipeline_log_text(paste("Pipeline did not start.", msg, sep = "\n"))
+        action_confirm$pending_run_cfg <- NULL
+        return()
+      }
+
       action_confirm$pending_run_cfg <- NULL
       run_pipeline_now(cfg_to_run)
     },
@@ -2342,7 +1569,7 @@ server <- function(input, output, session) {
     }
 
     if (isTRUE(action_confirm$ask_stop)) {
-      showModal(modalDialog(
+      showModal(pipeline_modal(
         title = "Confirm stop",
         size = "m",
         easyClose = TRUE,
@@ -2383,15 +1610,15 @@ server <- function(input, output, session) {
 
   observeEvent(input$clear_all,
     {
-      showModal(modalDialog(
-        title = "Clear all inputs?",
+      showModal(pipeline_modal(
+        title = "Reset app?",
         size = "m",
         easyClose = TRUE,
-        tags$p("This will clear all uploaded files, configuration fields, and the pipeline log."),
+        tags$p("This will clear uploaded files, reset settings to the app startup defaults, clear the pipeline log, and refresh the results state."),
         tags$p("This action cannot be undone. Proceed?"),
         footer = tagList(
           actionButton("cancel_clear", "Cancel"),
-          actionButton("confirm_clear", "Clear everything", class = "btn-warning", icon = icon("trash"))
+          actionButton("confirm_clear", "Reset app", class = "btn-warning")
         )
       ))
     },
@@ -2468,22 +1695,25 @@ server <- function(input, output, session) {
   })
 
   observe({
-    invalidateLater(700, session)
+    if (!isTRUE(process_state$running)) {
+      return()
+    }
+
+    invalidateLater(2000, session)
 
     live_log <- NULL
 
-    if (!is.null(process_state$pipeline_log_file) && file.exists(process_state$pipeline_log_file)) {
-      live_log <- process_state$pipeline_log_file
-    } else if (!is.null(process_state$log_file) && file.exists(process_state$log_file)) {
+    if (!is.null(process_state$log_file) && file.exists(process_state$log_file)) {
       live_log <- process_state$log_file
+    } else if (!is.null(process_state$pipeline_log_file) && file.exists(process_state$pipeline_log_file)) {
+      live_log <- process_state$pipeline_log_file
     }
 
     if (!is.null(live_log)) {
-      pipeline_log_text(safe_read_file(live_log))
+      pipeline_log_text(read_log_preview(live_log))
     }
 
-    if (isTRUE(process_state$running) &&
-      !is.null(process_state$proc) &&
+    if (!is.null(process_state$proc) &&
       !process_state$proc$is_alive()) {
       exit_code <- process_state$proc$get_exit_status()
       process_state$running <- FALSE
@@ -2501,10 +1731,13 @@ server <- function(input, output, session) {
       }
 
       if (!is.null(process_state$pipeline_log_file) && file.exists(process_state$pipeline_log_file)) {
-        pipeline_log_text(safe_read_file(process_state$pipeline_log_file))
+        pipeline_log_text(read_log_preview(process_state$pipeline_log_file))
       } else if (!is.null(process_state$log_file) && file.exists(process_state$log_file)) {
-        pipeline_log_text(safe_read_file(process_state$log_file))
+        pipeline_log_text(read_log_preview(process_state$log_file))
       }
+
+      selected_result_image(NULL)
+      bump_results_gallery()
     }
   })
 
@@ -2522,8 +1755,21 @@ server <- function(input, output, session) {
       ),
       tags$div(
         style = "flex-shrink:0;",
-        actionButton("clear_all", "Clear all", class = "btn-secondary", style = "padding:6px 12px; font-size:12px; background:#242424; border-color:#242424; color:#fff;", icon = icon("trash"))
+        actionButton("clear_all", "Clear all", class = "btn-secondary", style = "padding:6px 12px; font-size:12px; background:#242424; border-color:#242424; color:#fff;", icon = icon("trash-alt"))
       )
+    )
+  })
+
+  output$allowed_metadata_groups_hint <- renderUI({
+    hint <- allowed_groups_hint_text(input$allowed_metadata_groups)
+    if (!nzchar(hint)) {
+      return(NULL)
+    }
+
+    tags$p(
+      class = "small-note",
+      style = "margin-top:6px; color:#b45309;",
+      hint
     )
   })
 
@@ -2537,9 +1783,11 @@ server <- function(input, output, session) {
 
   output$package_management_ui <- renderUI({
     missing_pkgs <- missing_packages_state()
-
-    if (length(missing_pkgs) == 0) {
-      return(NULL)
+    missing_packages_note <- if (length(missing_pkgs) > 0) {
+      tags$p(
+        class = "small-note",
+        paste("Missing packages:", paste(missing_pkgs, collapse = ", "))
+      )
     }
 
     tags$div(
@@ -2549,12 +1797,12 @@ server <- function(input, output, session) {
         class = "small-note",
         "The pipeline relies on several R packages. Click the button to check if all required packages are installed and install any missing ones."
       ),
-      tags$p(
-        class = "small-note",
-        paste("Missing packages:", paste(missing_pkgs, collapse = ", "))
-      ),
+      missing_packages_note,
       actionButton("install_missing_packages", "Install missing packages"),
-      verbatimTextOutput("package_status"),
+      tags$div(
+        class = "package-status-output",
+        textOutput("package_status", container = span)
+      ),
       tags$hr()
     )
   })
@@ -2574,6 +1822,17 @@ server <- function(input, output, session) {
     }
   })
 
+  output$output_dir_status <- renderText({
+    out <- sanitize_output_dir_path(input$output_dir)
+    abs_path <- if (is_absolute_path(out)) {
+      normalizePath(out, winslash = "/", mustWork = FALSE)
+    } else {
+      normalizePath(file.path(project_root, out), winslash = "/", mustWork = FALSE)
+    }
+
+    paste("Output will be saved to:", abs_path)
+  })
+
   output$data_overview <- renderUI({
     # Depend on inputs_cleared_timestamp() so overview is refreshed when inputs are cleared/opened
     inputs_cleared_timestamp()
@@ -2587,7 +1846,7 @@ server <- function(input, output, session) {
       "data",
       allow_config_fallback = FALSE
     )
-    allowed_groups <- unique(parse_allowed_groups(default_allowed_groups_value()))
+    allowed_groups <- unique(parse_allowed_groups(input$allowed_metadata_groups))
     allowed_groups_norm <- toupper(allowed_groups)
     metadata_mapping <- metadata_column_mapping()
 
@@ -2603,14 +1862,13 @@ server <- function(input, output, session) {
       tryCatch(builder(path), error = function(e) list(ok = FALSE, msg = conditionMessage(e)))
     }
 
-    md_info <- summarize_table(
+        md_info <- summarize_table(
       md_path,
       "No metadata file selected.",
       "Metadata file not found.",
       function(path) {
         md <- read_metadata_with_mapping(path, metadata_mapping)
         cols <- tolower(names(md))
-
 
         sample_n <- if ("sample" %in% cols) {
           sample_idx <- which(cols == "sample")
@@ -2639,9 +1897,61 @@ server <- function(input, output, session) {
         }
 
         invalid_groups <- character(0)
-        if (length(groups) > 0 && length(allowed_groups_norm) > 0) {
-          groups_norm <- toupper(trimws(groups))
-          invalid_groups <- sort(unique(groups[!(groups_norm %in% allowed_groups_norm)]))
+
+        if ("group" %in% cols && length(allowed_groups_norm) > 0) {
+          group_idx <- which(cols == "group")
+          group_raw <- trimws(as.character(md[[group_idx[1]]]))
+
+          qc_aliases <- metadata_qc_group_aliases()
+          row_is_qc <- toupper(group_raw) %in% qc_aliases
+
+          if ("sample" %in% cols) {
+            sample_idx <- which(cols == "sample")
+            sample_raw <- trimws(as.character(md[[sample_idx[1]]]))
+            row_is_qc <- row_is_qc | grepl("^QC", sample_raw, ignore.case = TRUE)
+          }
+
+          if (any(cols %in% c("type", "sample_type"))) {
+            type_idx <- which(cols %in% c("type", "sample_type"))[1]
+            type_raw <- trimws(as.character(md[[type_idx]]))
+            row_is_qc <- row_is_qc | (toupper(type_raw) %in% qc_aliases)
+          }
+
+          groups_for_validation <- group_raw
+          model_allowed_groups <- metadata_allowed_groups_by_model()
+
+          if (
+            length(model_allowed_groups) > 0 &&
+              "model" %in% cols &&
+              length(allowed_groups) >= 2
+          ) {
+            model_idx <- which(cols == "model")
+            model_raw <- trimws(as.character(md[[model_idx[1]]]))
+
+            valid_rows <- !is.na(groups_for_validation) &
+              !is_missing_like(groups_for_validation) &
+              !is.na(model_raw) &
+              !is_missing_like(model_raw)
+
+            if (any(valid_rows)) {
+              groups_for_validation[valid_rows] <- normalize_model_group_pairs(
+                groups_for_validation[valid_rows],
+                model_raw[valid_rows],
+                model_allowed_groups,
+                allowed_groups[1],
+                allowed_groups[2]
+              )
+            }
+          }
+
+          groups_for_validation <- groups_for_validation[!row_is_qc]
+          groups_for_validation <- groups_for_validation[!is.na(groups_for_validation)]
+          groups_for_validation <- groups_for_validation[!is_missing_like(groups_for_validation)]
+
+          if (length(groups_for_validation) > 0) {
+            groups_norm <- toupper(trimws(groups_for_validation))
+            invalid_groups <- sort(unique(groups_for_validation[!(groups_norm %in% allowed_groups_norm)]))
+          }
         }
 
         models <- if ("model" %in% cols) {
@@ -2794,279 +2104,87 @@ server <- function(input, output, session) {
     )
   })
 
-  output$results_gallery_summary <- renderUI({
+  output$qc_pca_comparison_summary <- renderTable({
     gallery_refresh_tick()
-    invalidateLater(2000, session)
-
-    if (isTRUE(results_cleared())) {
-      return(tags$p("Results were cleared. Run the pipeline or refresh the gallery to load existing outputs."))
-    }
 
     out_dir <- resolve_output_dir_abs()
+    summary_path <- file.path(out_dir, "global", "audits_global", "qc_pca_comparison_summary.csv")
 
-    if (!dir.exists(out_dir)) {
-      return(tags$p("Output directory not found yet. Run the pipeline first."))
+    placeholder <- data.frame(
+      metric = "No comparison summary available yet",
+      value = "Run the pipeline first",
+      unit = "",
+      stage = "",
+      note = "",
+      stringsAsFactors = FALSE
+    )
+
+    if (!file.exists(summary_path)) {
+      return(placeholder)
+    }
+
+    info <- file.info(summary_path)
+    clear_ts <- inputs_cleared_timestamp()
+    min_time <- if (!is.null(clear_ts)) clear_ts - 1 else session_started_at - 2
+    if (is.na(info$mtime) || info$mtime < min_time) {
+      return(placeholder)
+    }
+
+    tryCatch(
+      {
+        df <- readr::read_csv(summary_path, show_col_types = FALSE)
+        if (nrow(df) == 0) placeholder else as.data.frame(df)
+      },
+      error = function(e) placeholder
+    )
+  }, striped = TRUE, bordered = TRUE, spacing = "xs")
+
+  output$results_gallery_summary <- renderUI({
+    gallery_refresh_tick()
+
+    out_dir <- resolve_output_dir_abs()
+    img_files <- get_result_image_files()
+    summary_path <- file.path(out_dir, "global", "audits_global", "qc_pca_comparison_summary.csv")
+    clear_ts <- inputs_cleared_timestamp()
+    min_time <- if (!is.null(clear_ts)) clear_ts - 1 else session_started_at - 2
+    summary_current <- FALSE
+    if (file.exists(summary_path)) {
+      summary_info <- file.info(summary_path)
+      summary_current <- !is.na(summary_info$mtime) && summary_info$mtime >= min_time
+    }
+
+    latest_file <- ""
+    latest_time <- ""
+    if (length(img_files) > 0) {
+      info <- file.info(img_files)
+      latest_idx <- which.max(info$mtime)
+      latest_file <- rel_path_from_output(img_files[latest_idx], out_dir)
+      latest_time <- format(info$mtime[latest_idx], "%Y-%m-%d %H:%M:%S")
     }
 
     tags$div(
-      class = "settings-section-card",
-      tags$h5("Latest normalization summary"),
-      tags$ul(class = "small-note", do.call(tagList, normalization_summary_items(out_dir)))
+      class = "results-state-bar",
+      tags$div(
+        tags$strong("Output directory"),
+        tags$span(if (dir.exists(out_dir)) out_dir else paste0(out_dir, " (not found)"))
+      ),
+      tags$div(
+        tags$strong("Figures"),
+        tags$span(as.character(length(img_files)))
+      ),
+      tags$div(
+        tags$strong("QC/PCA table"),
+        tags$span(if (isTRUE(summary_current)) "available" else "not found for current run")
+      ),
+      tags$div(
+        tags$strong("Latest figure"),
+        tags$span(if (nzchar(latest_file)) paste0(latest_file, " | ", latest_time) else "none")
+      )
     )
   })
 
-  output$qc_pca_comparison_summary <- renderTable(
-    {
-      gallery_refresh_tick()
-      invalidateLater(2000, session)
-
-      if (isTRUE(results_cleared())) {
-        return(data.frame(
-          Metric = "Results",
-          Value = "Cleared",
-          Source = "Run the pipeline or refresh the gallery to load existing outputs",
-          stringsAsFactors = FALSE
-        ))
-      }
-
-      out_dir <- resolve_output_dir_abs()
-
-      if (!dir.exists(out_dir)) {
-        return(data.frame(
-          Metric = "Output",
-          Value = "Output directory not found yet",
-          Source = out_dir,
-          stringsAsFactors = FALSE
-        ))
-      }
-
-      rows <- list()
-      add_row <- function(metric, value, source) {
-        rows[[length(rows) + 1]] <<- data.frame(
-          Metric = metric,
-          Value = as.character(value),
-          Source = source,
-          stringsAsFactors = FALSE
-        )
-      }
-
-      audits_dir <- file.path(out_dir, "global", "audits_global")
-      exports_dir <- file.path(out_dir, "global", "exports_global")
-
-      filter_summary_path <- file.path(audits_dir, "filter_summary.csv")
-      filter_summary <- read_result_csv(filter_summary_path)
-      if (!is.null(filter_summary) && nrow(filter_summary) > 0) {
-        before_col <- intersect(c("n_features_before", "features_before"), names(filter_summary))
-        after_col <- intersect(c("n_features_after", "features_after"), names(filter_summary))
-
-        if (length(before_col) > 0) {
-          add_row(
-            "Initial feature count",
-            format_summary_number(filter_summary[[before_col[1]]][1], digits = 0),
-            rel_path_from_output(filter_summary_path, out_dir)
-          )
-        }
-
-        if (length(after_col) > 0) {
-          final_features <- tail(filter_summary[[after_col[1]]], 1)
-          add_row(
-            "Retained feature count",
-            format_summary_number(final_features, digits = 0),
-            rel_path_from_output(filter_summary_path, out_dir)
-          )
-        }
-      } else {
-        add_row("Retained feature count", "Not available", "filter_summary.csv not found")
-      }
-
-      qc_rsd_path <- file.path(audits_dir, "qc_rsd_values_pre_variants.csv")
-      qc_rsd <- read_result_csv(qc_rsd_path)
-      if (!is.null(qc_rsd) && nrow(qc_rsd) > 0) {
-        rsd_col <- intersect(c("qc_rsd", "QC_RSD", "rsd", "RSD"), names(qc_rsd))
-        if (length(rsd_col) > 0) {
-          rsd_values <- as.numeric(qc_rsd[[rsd_col[1]]])
-          add_row(
-            "Median QC RSD",
-            format_summary_number(stats::median(rsd_values, na.rm = TRUE)),
-            rel_path_from_output(qc_rsd_path, out_dir)
-          )
-          add_row(
-            "QC RSD <= 30%",
-            format_count_percent(sum(rsd_values <= 30, na.rm = TRUE), sum(!is.na(rsd_values))),
-            rel_path_from_output(qc_rsd_path, out_dir)
-          )
-        } else {
-          add_row("Median QC RSD", "RSD column not found", rel_path_from_output(qc_rsd_path, out_dir))
-        }
-      } else {
-        add_row("Median QC RSD", "Not available", "qc_rsd_values_pre_variants.csv not found")
-      }
-
-      sample_rsd_path <- file.path(audits_dir, "rsd_values_pre_variants.csv")
-      sample_rsd <- read_result_csv(sample_rsd_path)
-      if (!is.null(sample_rsd) && nrow(sample_rsd) > 0) {
-        sample_rsd_col <- intersect(c("rsd", "RSD"), names(sample_rsd))
-        if (length(sample_rsd_col) > 0) {
-          sample_rsd_values <- as.numeric(sample_rsd[[sample_rsd_col[1]]])
-          add_row(
-            "Median sample RSD",
-            format_summary_number(stats::median(sample_rsd_values, na.rm = TRUE)),
-            rel_path_from_output(sample_rsd_path, out_dir)
-          )
-          add_row(
-            "Sample RSD <= 30%",
-            format_count_percent(sum(sample_rsd_values <= 30, na.rm = TRUE), sum(!is.na(sample_rsd_values))),
-            rel_path_from_output(sample_rsd_path, out_dir)
-          )
-        } else {
-          add_row("Median sample RSD", "RSD column not found", rel_path_from_output(sample_rsd_path, out_dir))
-        }
-      } else {
-        add_row("Median sample RSD", "Not available", "rsd_values_pre_variants.csv not found")
-      }
-
-      iqr_audit_path <- file.path(audits_dir, "low_variance_iqr_audit_ACTIVE.csv")
-      iqr_audit <- read_result_csv(iqr_audit_path)
-      if (!is.null(iqr_audit) && nrow(iqr_audit) > 0 && "kept" %in% names(iqr_audit)) {
-        kept_values <- toupper(as.character(iqr_audit$kept)) %in% c("TRUE", "1", "YES")
-        removed_n <- sum(!kept_values, na.rm = TRUE)
-        add_row(
-          "IQR low-variance filter",
-          paste0(format_count_percent(removed_n, nrow(iqr_audit)), " removed"),
-          rel_path_from_output(iqr_audit_path, out_dir)
-        )
-      } else {
-        add_row("IQR low-variance filter", "Not available or disabled", "low_variance_iqr_audit_ACTIVE.csv")
-      }
-
-      loess_candidates <- c(
-        file.path(exports_dir, "06_loess_qc_correction_audit_weight_then_LOESS.csv"),
-        list.files(
-          exports_dir,
-          pattern = "^06_loess_qc_correction_audit.*\\.csv$",
-          full.names = TRUE,
-          ignore.case = TRUE
-        )
-      )
-      loess_path <- loess_candidates[file.exists(loess_candidates)][1]
-      loess_audit <- read_result_csv(loess_path)
-      if (!is.null(loess_audit) && nrow(loess_audit) > 0) {
-        corrected_col <- intersect(c("corrected", "loess_corrected"), names(loess_audit))
-        corrected_n <- if (length(corrected_col) > 0) {
-          sum(toupper(as.character(loess_audit[[corrected_col[1]]])) %in% c("TRUE", "1", "YES"), na.rm = TRUE)
-        } else {
-          NA_integer_
-        }
-
-        add_row(
-          "Drift correction modified features",
-          format_count_percent(corrected_n, nrow(loess_audit)),
-          rel_path_from_output(loess_path, out_dir)
-        )
-
-        if (!is.na(corrected_n)) {
-          add_row(
-            "Drift correction unchanged features",
-            format_count_percent(nrow(loess_audit) - corrected_n, nrow(loess_audit)),
-            rel_path_from_output(loess_path, out_dir)
-          )
-        }
-
-        qc_points_col <- intersect(c("qc_points_used", "n_qc_points"), names(loess_audit))
-        if (length(qc_points_col) > 0) {
-          qc_points <- as.numeric(loess_audit[[qc_points_col[1]]])
-          add_row(
-            "Median QC points used for drift correction",
-            format_summary_number(stats::median(qc_points, na.rm = TRUE), digits = 0),
-            rel_path_from_output(loess_path, out_dir)
-          )
-        }
-      } else {
-        add_row("Drift correction modified features", "Not available", "QC-LOESS audit file not found")
-      }
-
-      loess_metrics_candidates <- list.files(
-        audits_dir,
-        pattern = "^(QC_.*audit_feature_metrics|.*LOESS.*feature_metrics)\\.csv$",
-        full.names = TRUE,
-        ignore.case = TRUE
-      )
-      loess_metrics_path <- loess_metrics_candidates[file.exists(loess_metrics_candidates)][1]
-      loess_metrics <- read_result_csv(loess_metrics_path)
-      if (!is.null(loess_metrics) && nrow(loess_metrics) > 0) {
-        if ("rsd_improved" %in% names(loess_metrics)) {
-          improved <- toupper(as.character(loess_metrics$rsd_improved)) %in% c("TRUE", "1", "YES")
-          add_row(
-            "QC RSD improved after drift correction",
-            format_count_percent(sum(improved, na.rm = TRUE), sum(!is.na(loess_metrics$rsd_improved))),
-            rel_path_from_output(loess_metrics_path, out_dir)
-          )
-        }
-
-        if (all(c("qc_rsd_pre", "qc_rsd_post") %in% names(loess_metrics))) {
-          add_row(
-            "Median QC RSD pre -> post drift correction",
-            paste0(
-              format_summary_number(stats::median(as.numeric(loess_metrics$qc_rsd_pre), na.rm = TRUE)),
-              "% -> ",
-              format_summary_number(stats::median(as.numeric(loess_metrics$qc_rsd_post), na.rm = TRUE)),
-              "%"
-            ),
-            rel_path_from_output(loess_metrics_path, out_dir)
-          )
-        }
-
-        if ("drift_improved" %in% names(loess_metrics)) {
-          improved <- toupper(as.character(loess_metrics$drift_improved)) %in% c("TRUE", "1", "YES")
-          add_row(
-            "Residual drift improved after correction",
-            format_count_percent(sum(improved, na.rm = TRUE), sum(!is.na(loess_metrics$drift_improved))),
-            rel_path_from_output(loess_metrics_path, out_dir)
-          )
-        }
-
-        if (all(c("abs_drift_cor_pre", "abs_drift_cor_post") %in% names(loess_metrics))) {
-          add_row(
-            "Median absolute drift correlation pre -> post",
-            paste0(
-              format_summary_number(stats::median(as.numeric(loess_metrics$abs_drift_cor_pre), na.rm = TRUE), digits = 3),
-              " -> ",
-              format_summary_number(stats::median(as.numeric(loess_metrics$abs_drift_cor_post), na.rm = TRUE), digits = 3)
-            ),
-            rel_path_from_output(loess_metrics_path, out_dir)
-          )
-        }
-      }
-
-      pca_files <- list.files(
-        out_dir,
-        pattern = "^PCA_.*\\.(png|jpg|jpeg)$",
-        recursive = TRUE,
-        full.names = TRUE,
-        ignore.case = TRUE
-      )
-      add_row("PCA figures", length(pca_files), "plots/pca")
-      add_row(
-        "Biological PCA figures",
-        sum(grepl("group|model", basename(pca_files), ignore.case = TRUE)),
-        "PCA filenames containing group/model"
-      )
-      add_row(
-        "Technical PCA figures",
-        sum(grepl("sex|technical|qc", basename(pca_files), ignore.case = TRUE)),
-        "PCA filenames containing sex/technical/QC"
-      )
-
-      do.call(rbind, rows)
-    },
-    striped = TRUE,
-    bordered = TRUE,
-    spacing = "s"
-  )
-
   output$results_gallery <- renderUI({
     gallery_refresh_tick()
-    invalidateLater(2000, session)
 
     out_dir <- resolve_output_dir_abs()
 
@@ -3078,6 +2196,11 @@ server <- function(input, output, session) {
 
     if (length(img_files) == 0) {
       return(tags$p("No result images found yet. Run the pipeline to generate figures."))
+    }
+
+    current <- selected_result_image()
+    if (!is_valid_image_path(current)) {
+      selected_result_image(img_files[1])
     }
 
     prefix <- ensure_results_resource_path(out_dir)
@@ -3172,7 +2295,6 @@ server <- function(input, output, session) {
 
     tags$div(
       class = "results-preview-box",
-      tags$div(class = "results-preview-title", "Selected Figure"),
       tags$div(class = "results-preview-path", rel),
       tags$img(src = img_src, class = "results-preview-image"),
       tags$div(
@@ -3204,10 +2326,10 @@ server <- function(input, output, session) {
         ext <- tolower(tools::file_ext(img_path))
 
         if (format == "png" && ext == "png") {
-          file.copy(img_path, file, overwrite = TRUE, dpi = 300)
+          file.copy(img_path, file, overwrite = TRUE)
           return()
         } else if (format == "jpeg" && ext %in% c("jpg", "jpeg")) {
-          file.copy(img_path, file, overwrite = TRUE, dpi = 300)
+          file.copy(img_path, file, overwrite = TRUE)
           return()
         }
 
