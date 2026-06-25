@@ -96,7 +96,7 @@ pvalue_correction_method <- "FDR"              # options: "raw", "FDR", "Bonferr
 # "both" = current two-group workflow plus multi-group analysis
 comparison_mode <- "pairwise"                  # options: "pairwise", "multigroup", "both"
 multigroup_groups <- character(0)              # options: character vector, e.g. c("pre", "post", "recovery"); empty = auto-detect biological groups per model
-multigroup_test <- "kruskal"                   # options: "kruskal", "anova", "welch_anova"
+multigroup_test <- "anova"                     # options: "kruskal", "anova", "welch_anova"
 multigroup_pairwise_mode <- "selected"         # recommended: "selected"; options: "none", "selected", or explicit legacy "all"
 multigroup_pairwise_pairs <- NULL              # options: NULL or character vector, e.g. c("pre vs post", "pre vs recovery")
 
@@ -142,7 +142,7 @@ heatmap_breaks_limit <- 5                      # options: numeric > 0 (max absol
 make_sig_heatmap_by_model <- FALSE             # options: TRUE/FALSE (if TRUE, additional heatmaps will be generated showing only the significant features for each comparison)
 make_sig_heatmap_by_model_sex <- FALSE         # options: TRUE/FALSE (if TRUE, additional heatmaps will be generated showing only the significant features for each comparison)
 make_sig_heatmap_FvsM_within_group <- FALSE    # options: TRUE/FALSE (if TRUE, additional heatmaps will be generated for FvsM within each group)
-sig_heatmap_max_features <- 70                 # options: integer > 0 (max number of features to show in the significant heatmaps; set to a high number to include all significant features)   
+sig_heatmap_max_features <- 50                 # options: integer > 0 (max number of features to show in the significant heatmaps; set to a high number to include all significant features)   
 sig_heatmap_require_fc_cutoff <- TRUE          # options: TRUE/FALSE (if TRUE, only features that pass both the significance threshold and the fold-change cutoff will be included in the significant heatmaps; if FALSE, all features that pass the significance threshold will be included regardless of fold-change)
 
 # =============================================================================
