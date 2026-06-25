@@ -1,6 +1,8 @@
-# Compound Discoverer - Metabolomics Pipeline (R)
+# CD-MetaboRefine
 
-Modular R pipeline for processing untargeted metabolomics data exported from Compound Discoverer.
+**Compound Discoverer Refinement and Metabolomics Pipeline**
+
+An R/Shiny pipeline for quality control, normalization, statistical analysis, and visualization of Compound Discoverer metabolomics data.
 
 ## Overview
 
