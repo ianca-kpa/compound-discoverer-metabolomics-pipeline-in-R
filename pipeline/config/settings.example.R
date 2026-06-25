@@ -129,7 +129,7 @@ make_heatmap_by_model <- TRUE                  # options: TRUE/FALSE
 make_heatmap_by_model_sex <- TRUE              # options: TRUE/FALSE
 heatmap_top_n <- 50
 
-heatmap_scale_method <- "pareto"               # options: "none","zscore","pareto"
+heatmap_scale_method <- "zscore"               # options: "none","zscore","pareto"
 heatmap_order_samples_by_group <- TRUE         # options: TRUE/FALSE (if TRUE, samples will be ordered by group in the heatmaps; if FALSE, original order from the input data will be kept)
 heatmap_cluster_distance <- "euclidean"        # options: "euclidean", "manhattan"
 heatmap_cluster_method <- "ward.D2"            # options: "ward.D2", "complete", "average"
