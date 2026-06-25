@@ -64,7 +64,7 @@ apply_missing_setting_defaults <- function() {
     make_heatmap_by_model = TRUE,
     make_heatmap_by_model_sex = TRUE,
     heatmap_top_n = 80,
-    heatmap_scale_method = "pareto",
+    heatmap_scale_method = "zscore",
     heatmap_order_samples_by_group = TRUE,
     heatmap_cluster_distance = "euclidean",
     heatmap_cluster_method = "ward.D2",
