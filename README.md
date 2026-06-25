@@ -1,35 +1,217 @@
-# Compound Discoverer Metabolomics Pipeline in R
+# Compound Discoverer - Metabolomics Pipeline (R)
 
-A modular R pipeline and Shiny control panel for refining untargeted metabolomics data exported from Compound Discoverer.
+Modular R pipeline for processing untargeted metabolomics data exported from Compound Discoverer.
 
-The workflow reads a Compound Discoverer feature table, experimental metadata, and an optional reference table. It then produces cleaned assay matrices, normalization audits, feature-filter audits, duplicate-handling reports, PCA figures, volcano plots, heatmaps, statistical tables, and MetaboAnalyst-ready exports.
+## Overview
 
-## Key Features
+The pipeline combines Compound Discoverer feature tables with experimental metadata and produces refined assay data, quality-control summaries, statistical analyses and visualizations. It can be run from the command line, from R/RStudio, or through the included Shiny application.
 
-- Compound Discoverer feature-table refinement
-- Metadata validation and optional manual metadata-column mapping
-- Optional sample-weight normalization before the main normalization step
-- Main normalization modes: `none`, `PQN`, and `QC_LOESS`
-- Missingness, presence, RSD, QC RSD, and low-variance IQR filters
-- Duplicate metabolite handling with optional reference-table matching
-- Student, Welch, Wilcoxon, and limma statistical tests
-- PCA, volcano plots, top heatmaps, and significant-feature heatmaps
-- Per-model and sex-stratified comparisons
-- MetaboAnalyst-ready export tables
-- Shiny app for uploads, settings editing, real-time logs, and result browsing
+Main capabilities:
 
-## Repository Structure
+- feature-table refinement, filtering and duplicate handling;
+- optional weight normalization;
+- QC-RSC, QC-LOESS, cyclic LOESS, PQN-QC, PQN-sample and no-normalization scenarios;
+- QC diagnostics and normalization audit outputs;
+- PCA, pairwise statistics with optional batch adjustment through `limma`, volcano plots and heatmaps;
+- exploratory multi-group analysis;
+- MetaboAnalyst-compatible exports;
+- sample-level diagnostic reports;
+- execution through Rscript, R/RStudio or the Shiny application.
+
+The workflow is orchestrated by `pipeline/run_pipeline.R` and implemented in the modules under `pipeline/R/`.
+
+## Quick start
+
+```powershell
+git clone https://github.com/ianca-kpa/compound-discoverer-metabolomics-pipeline-in-R.git
+cd compound-discoverer-metabolomics-pipeline-in-R
+Copy-Item pipeline/config/settings.example.R pipeline/config/settings.R
+Rscript pipeline/run_pipeline.R
+```
+
+To run interactively in R:
+
+```r
+source("pipeline/run_pipeline.R")
+```
+
+To open the Shiny application:
+
+```r
+shiny::runApp(".")
+```
+
+## Requirements
+
+- R ≥ 4.5.3 recommended;
+- RStudio optional;
+- CRAN and Bioconductor dependencies declared in `pipeline/R/00_packages.R`.
+
+The pipeline checks its dependencies when it starts.
+
+## Input data
+
+The main workflow expects:
+
+- a Compound Discoverer feature table, usually an `.xlsx` file;
+- a metadata table with sample identifiers and biological annotations;
+- an optional reference/annotation table;
+- a complete injection-order file when using `qcrsc` or `qc_loess`.
+
+Metadata column names are auto-detected when possible. The most important fields are:
+
+| Field | Purpose |
+|---|---|
+| `sample` | Sample name matching the Compound Discoverer `Area: <sample>` columns. |
+| `group` | Biological group used in comparisons. |
+| `sex` | Sex or subgroup label used by sex-stratified comparisons. |
+| `model` | Model/cohort label used to split downstream analyses. |
+| `weight` | Optional sample weight/mass used for weight normalization. |
+| `batch` | Optional batch label used by QC-RSC and by unpaired `limma` comparisons. |
+
+## Configuration
+
+Copy `pipeline/config/settings.example.R` to `pipeline/config/settings.R`. The latter is the active local configuration.
+
+Important settings include:
+
+- `cd_file_path` and `cd_sheet`;
+- `metadata_path` and `metadata_sheet`;
+- `reference_path`, `reference_sheet` and `use_reference_file`;
+- `comparison_group_control` and `comparison_group_treatment`;
+- `normalization_mode`, `use_weight_normalization` and normalization parameters;
+- filtering and duplicate-handling parameters;
+- `comparison_mode` and multi-group parameters;
+- `output_dir` and `output_level`.
+
+### Normalization scenarios
+
+`normalization_mode` controls the main preprocessing scenario.
+
+| Mode | Description |
+|---|---|
+| `none` | Uses filtered intensities without normalization. |
+| `weight` | Weight-only workflow. In Shiny this is produced by selecting `none` plus weight normalization. |
+| `qcrsc` | QC-RSC drift correction. Requires complete injection order and enough QC samples. |
+| `qc_loess` | QC-based LOESS drift correction. Requires complete injection order and enough QC samples. |
+| `cyclic_loess` | Cyclic LOESS normalization through `limma::normalizeCyclicLoess`. |
+| `pqn_qc` | Probabilistic quotient normalization using QC samples as the reference. |
+| `pqn_sample` | Probabilistic quotient normalization using biological samples as the reference. Useful when QC samples are absent or too few. |
+
+When `use_weight_normalization <- TRUE` with `qcrsc` or `qc_loess`, drift correction is applied first and weight normalization is then applied only to biological samples. The pipeline writes a weight-normalization audit when Standard or Full / Debug outputs are enabled.
+
+When metadata contains two or more valid `batch` values, unpaired `limma`
+comparisons include batch as a covariate. The pipeline stops if batch and the
+biological comparison are fully confounded. Student, Welch and Wilcoxon tests
+cannot adjust for batch and are blocked when multiple batches are present.
+QC-RSC also uses the metadata batch values when available.
+
+### Output levels
+
+`output_level <- "standard"` controls which artifacts are written. It does not change the statistical calculations.
+
+| Level | Outputs |
+|---|---|
+| `minimal` | Final statistics Excel per model, principal PCA, combined PCA when applicable, volcano plots for the five primary pairwise comparisons, `README.txt` and `PIPELINE_LOG.txt`. |
+| `standard` | Everything in Minimal, plus main heatmaps, summarized QC and normalization audits, QC-RSD and drift-correlation summaries when available, and enabled multi-group outputs. This is the default. |
+| `full_debug` | All final, intermediate and technical artifacts, including matrices, `BIO_ONLY`, `WITH_QC`, complete audits, technical plots, CSV, TXT and XLSX outputs. |
+
+Legacy configurations containing `minimal_output <- TRUE` are interpreted as `output_level <- "minimal"`.
+
+### Filtering and MetaboAnalyst compatibility
+
+The active configuration supports missingness filtering, presence filtering, optional half-minimum imputation, QC-RSD/RSD variants, duplicate collapsing, and an optional low-variance IQR filter.
+
+For MetaboAnalyst-style comparisons, the most relevant settings are:
+
+- `low_variance_filter_method <- "iqr"`;
+- `low_variance_filter_rounding <- "ceiling"`;
+- `pca_scaling <- "pareto"`;
+- `heatmap_scale_method <- "pareto"`;
+- `export_metaboanalyst_ready <- TRUE`.
+
+### Multi-group analysis
+
+Multi-group analysis is exploratory and complements these five primary pairwise comparisons:
+
+- `ALL_TGvsWT`;
+- `F_TGvsWT`;
+- `M_TGvsWT`;
+- `TG_FvsM`;
+- `WT_FvsM`.
+
+`MULTIGROUP_GLOBAL` reports `p_value`, `FDR`, `test_type_used`, `groups_compared`, group/sample counts and one mean column per group. A significant ANOVA, Welch ANOVA or Kruskal-Wallis result indicates that at least one group differs, but does not provide a single numerator/denominator or direction of effect.
+
+Therefore, `FC_num_over_den` and `log2FC_num_over_den` remain `NA`, and the global test does not generate Up/Down classification or volcano plots. Directional interpretation should use the primary comparisons or selected biologically meaningful pairwise follow-ups.
+
+With Standard or Full / Debug output, enabled multi-group analysis produces:
+
+- the `MULTIGROUP_GLOBAL` results sheet;
+- multi-group PCA;
+- top-feature multi-group heatmaps;
+- `MULTIGROUP_README.txt` in each model statistics directory.
+
+## Running the pipeline
+
+### Shiny
+
+```r
+shiny::runApp(".")
+```
+
+### R or RStudio
+
+```r
+source("pipeline/run_pipeline.R")
+```
+
+### Command line
+
+```powershell
+Rscript pipeline/run_pipeline.R
+```
+
+## Output structure
+
+Outputs are written under `output_dir`. The exact files depend on `output_level`, enabled analyses and available QC data.
+
+```text
+<output_dir>/
+|-- README.txt
+|-- PIPELINE_LOG.txt
+|-- global/
+|   |-- audits_global/
+|   |-- exports_global/
+|   `-- plots_global/
+`-- <MODEL>/
+    |-- exports/
+    |   |-- stats/
+    |   `-- metaboanalyst/        # Full / Debug
+    `-- plots/
+        |-- pca/
+        |-- volcano/
+        |-- heatmap/              # Standard or Full / Debug
+        `-- heatmap_significant/  # Full / Debug
+```
+
+Empty output directories are removed at the end of a successful run.
+
+## Repository structure
 
 ```text
 .
 |-- app.R
 |-- app/
-|   |-- global.R              # Shiny helpers, settings form, glossary
-|   |-- server.R              # Shiny server logic
-|   |-- ui.R                  # Shiny interface
+|   |-- global.R
+|   |-- helpers.R
+|   |-- metadata_helpers.R
+|   |-- server.R
+|   |-- server_settings_helpers.R
+|   |-- server_util_helpers.R
+|   |-- ui.R
 |   `-- assets/
 |-- pipeline/
-|   |-- run_pipeline.R        # Main script entry point
+|   |-- run_pipeline.R
 |   |-- config/
 |   |   `-- settings.example.R
 |   `-- R/
@@ -37,191 +219,72 @@ The workflow reads a Compound Discoverer feature table, experimental metadata, a
 |       |-- 01_validation.R
 |       |-- 02_comparisons.R
 |       |-- 03_helpers_io_log.R
+|       |-- 03a_logging_helpers.R ... 03f_runtime_console_helpers.R
 |       |-- 04_metadata.R
 |       |-- 05_features_assay.R
 |       |-- 06_normalization_filters.R
+|       |-- 06a_normalization_core.R ... 06c_filter_helpers.R
 |       |-- 07_duplicates.R
 |       |-- 08_exports.R
 |       |-- 09_pca.R
 |       |-- 10_stats_volcano.R
+|       |-- 10a_stats_core.R ... 10d_stats_exports.R
 |       |-- 11_heatmaps.R
 |       `-- 12_main_pipeline.R
+|-- scripts/
 |-- images/
-`-- output/                 # Generated at runtime, or another output_dir
+`-- project/
 ```
 
-## Requirements
+The numbered compatibility modules (`03_helpers_io_log.R`, `06_normalization_filters.R` and `10_stats_volcano.R`) load their corresponding split helper modules.
 
-- R 4.5.3 or newer is recommended
-- RStudio is optional, but useful for interactive work
-- Required CRAN/Bioconductor packages are declared in `pipeline/R/00_packages.R`
+## Shiny application
 
-The pipeline and app attempt to install missing packages when they start. If package installation fails, run `pipeline/R/00_packages.R` directly and then rerun the pipeline.
+The Shiny interface provides file inputs, metadata mapping, normalization controls, output-level selection, a settings builder, execution controls, live logs and a results gallery. It can also warn before selecting heavier output levels and asks whether weight normalization should be applied after QC-RSC or QC-LOESS.
 
-## Quickstart
+### Data overview
 
-```powershell
-git clone https://github.com/ianca-kpa/compound-discoverer-metabolomics-pipeline-in-R.git
-cd compound-discoverer-metabolomics-pipeline-in-R
+![Shiny application — Data overview panel](images/shiny-app-data-overview.png)
 
-Copy-Item pipeline/config/settings.example.R pipeline/config/settings.R
+### Settings builder
 
-Rscript pipeline/run_pipeline.R
-```
+![Shiny application — Settings builder panel](images/shiny-app-settings-builder.png)
 
-Interactive alternatives:
+## Examples
 
-```r
-source("pipeline/run_pipeline.R")
-shiny::runApp(".")
-```
-
-## Input Files
-
-The pipeline expects:
-
-- `cd_file_path`: Compound Discoverer export table with `Area:` sample columns
-- `metadata_path`: metadata table with sample, group, sex, model, and optional weight columns
-- `reference_path`: optional reference table used for duplicate matching
-
-Accepted file formats are CSV, TSV, TXT, XLSX, and XLS. In the Shiny app, uploaded files are copied into the project `data/` folder and the configuration is updated automatically.
-
-Metadata columns can be auto-detected from common names. If the file uses custom names, enable manual metadata mapping in the app or set the corresponding mapping values in `settings.R`.
-
-## Configuration
-
-Create a local settings file before running from script:
-
-```r
-file.copy(
-  "pipeline/config/settings.example.R",
-  "pipeline/config/settings.R",
-  overwrite = FALSE
-)
-```
-
-Important settings:
-
-- `output_dir`: root folder for all outputs
-- `comparison_group_control` and `comparison_group_treatment`: control and treatment labels used for comparisons
-- `use_reference_file`: enables or disables reference-table use
-- `duplicate_name_strategy`: controls how duplicate named features are kept or collapsed
-- `use_weight_normalization`: divides sample intensities by sample weight before main normalization
-- `normalization_mode`: chooses `none`, `PQN`, or `QC_LOESS`
-- `rsd_filter_metric`, `rsd_thresholds`, and `active_variant`: create and select QC RSD or sample RSD variants
-- `low_variance_filter_method` and `low_variance_filter_fraction`: optionally remove the lowest-IQR features
-- `p_value_cutoff`, `fdr_cutoff`, and `fc_cutoff_log2`: statistical and plotting thresholds
-- `pca_scaling` and heatmap settings: control visual output scaling and clustering
-- `minimal_output`: skips selected intermediate global exports while keeping selected plots and statistics
-
-## Normalization Workflow
-
-Normalization happens in two stages:
-
-1. Optional weight normalization with `use_weight_normalization`.
-2. Main normalization with `normalization_mode`.
-
-Available main normalization modes:
-
-- `none`: keeps the post-weight matrix unchanged.
-- `PQN`: applies probabilistic quotient normalization using QC samples as the reference basis and writes a PQN factor audit.
-- `QC_LOESS`: corrects injection-order signal drift using QC samples and writes a per-feature QC-LOESS audit.
-
-`QC_LOESS` requires enough valid QC points per feature. The minimum is controlled by `loess_min_qc_points`, and smoothness is controlled by `QC_LOESS_span`.
-
-## Filtering And Duplicate Handling
-
-The pipeline applies filters in this general order:
-
-1. Missingness exclusion
-2. Presence filtering and optional half-minimum imputation
-3. Known-only filtering, if enabled
-4. RSD or QC RSD variant creation
-5. Optional low-variance IQR filtering
-6. Duplicate metabolite handling
-
-RSD filtering creates named variants such as `QC_RSD20` or `RSD20`. `active_variant` selects which variant continues into downstream statistics and plots. When `rsd_filter_metric` is `none`, the pipeline uses `BASE`.
-
-Duplicate strategies:
-
-- `reference_or_best_qc_rsd`: prefer reference-table RT matching, then best QC RSD fallback
-- `collapse_best_qc_rsd`: keep the duplicate with the best QC RSD
-- `collapse_mean`: average duplicate feature intensities
-- `collapse_sum`: sum duplicate feature intensities
-- `keep_separate`: keep duplicate features separate
-
-## Running With The Shiny App
-
-Start the app from the repository root:
-
-```r
-shiny::runApp(".")
-```
-
-The app provides:
-
-- Input upload controls for data, metadata, and optional reference files
-- Manual metadata and reference-column mapping
-- A settings builder with standardized controls
-- A variable guide that explains each exposed setting
-- Save-to-`settings.R` support
-- Pipeline run/stop controls
-- A live pipeline log
-- Data overview summaries
-- A results gallery with normalization, QC/PCA, filter, and figure summaries
-
-## Expected Outputs
-
-Outputs are written to `output/` unless `output_dir` is changed.
-
-Common outputs include:
-
-- `PIPELINE_LOG.txt`
-- `global/audits_global/filter_summary.csv`
-- Missingness, presence, RSD, QC RSD, IQR, and duplicate audit tables
-- Processed assay matrices and named feature tables
-- PQN or QC-LOESS normalization audit files, depending on selected mode
-- PCA figures
-- Volcano plots
-- Top and significant heatmaps
-- Per-model Excel statistics workbooks
-- Plain-text significant metabolite lists
-- MetaboAnalyst-ready export tables
-
-## Troubleshooting
-
-- `pipeline/config/settings.R not found`: copy `pipeline/config/settings.example.R` to `pipeline/config/settings.R`.
-- Package installation errors: run `source("pipeline/R/00_packages.R")` and check that R can install CRAN/Bioconductor packages.
-- Spreadsheet read errors: check the path, extension, and sheet name or index.
-- No `Area:` columns found: check that the Compound Discoverer export contains sample intensity columns.
-- Metadata validation fails: verify sample, group, sex, model, and weight column names or use manual mapping in the app.
-- QC-LOESS fails or corrects few features: check that QC samples exist, injection order is available, and each feature has at least `loess_min_qc_points` valid QC values.
-- Reference duplicate matching falls back to QC RSD: verify reference metabolite/name and RT columns, or set manual reference-column names.
-
-## Shiny Application Screens
-
-**Data overview panel**
-
-![Shiny application - Data overview panel](images/shiny-app-data-overview.png)
-
-**Settings builder panel**
-
-![Shiny application - Settings builder panel](images/shiny-app-settings-builder.png)
-
-## Example Figures
-
-PCA example:
+### PCA
 
 ![PCA example](images/pca_example.png)
 
-PCA example 2:
-
 ![PCA example 2](images/pca_example2.png)
 
-Volcano example:
+### Volcano plot
 
 ![Volcano example](images/volcano_example.png)
 
-Heatmap example:
+### Heatmap
 
 ![Heatmap example](images/heatmap_example.png)
+
+## Troubleshooting
+
+- **`pipeline/config/settings.R not found`**: copy `settings.example.R` to `settings.R` and update the paths.
+- **Package installation errors**: run or source `pipeline/R/00_packages.R`, then restart the pipeline.
+- **Spreadsheet read errors**: verify the file extension, sheet name/index and configured path.
+- **Missing QC or injection-order error**: `qcrsc` and `qc_loess` require enough QC samples and a complete injection-order file.
+- **Batch-adjustment error**: unpaired `limma` can adjust for batch only when batch is not fully confounded with the biological comparison. Student, Welch and Wilcoxon tests do not support batch adjustment in this pipeline.
+- **Invalid weight error**: check the metadata weight/mass column or set `stop_on_invalid_weight <- FALSE` if invalid weights should be converted to `NA`.
+- **Unexpectedly few or many files**: verify `output_level` in the active configuration or Shiny settings.
+
+## Diagnostic scripts
+
+The `scripts/` folder contains optional helpers around the main pipeline:
+
+```powershell
+Rscript scripts/diagnose_sample.R PCA_OUTLIERS data/MA_ACTIVE_duplicate_ONLY_GLOBAL_NO_QC.csv
+Rscript scripts/diagnose_sample.R H3 output/<run>/global/exports_global/MA_ACTIVE_duplicate_ONLY_GLOBAL_NO_QC.csv path/to/metadata.xlsx output/diagnostics_h3_metadata
+Rscript scripts/generate_sample_report.R output/diagnostics_pca_outliers H3
+Rscript scripts/generate_qc_loess_weight_plot.R output/<run>/global/exports_global output/<run>/global/plots_global/normalization
+```
+
+See `scripts/README.md` for the full diagnostic workflow.

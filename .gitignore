@@ -6,3 +6,7 @@ output/
 .Rproj
 pipeline/config/settings.R
 data/
+tmp_*.rds
+*.tmp
+output-old/
+*.zip
