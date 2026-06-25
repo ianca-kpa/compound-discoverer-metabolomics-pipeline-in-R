@@ -59,13 +59,11 @@ build_feature_table <- function(cd_raw,
                                 sanitize_names_for_exports = TRUE,
                                 sanitize_mode = "greek_latin_ascii",
                                 mz_digits = 4,
-                                rt_digits = 2) {
+                                rt_digits = 2,
+                                remove_greek_letters_from_names = TRUE,
+                                remove_isomer_descriptors_from_names = TRUE) {
   mz_col <- get_mz_col(cd_raw)
   rt_col <- get_rt_col(cd_raw)
-  
-  if (is.na(mz_col) || is.na(rt_col)) {
-    stop("Could not detect mz/RT columns.")
-  }
   
   name_col <- if ("Name" %in% names(cd_raw)) "Name" else NA_character_
   formula_col <- if ("Formula" %in% names(cd_raw)) "Formula" else NA_character_
@@ -79,18 +77,24 @@ build_feature_table <- function(cd_raw,
   
   Formula_clean <- str_replace_all(Formula_clean, "\\s+", "")
   Name_canon <- strip_v_suffix_end(Name_clean)
+  Name_canon <- standardize_metabolite_name(
+    Name_canon,
+    remove_greek_letters = remove_greek_letters_from_names,
+    remove_isomer_descriptors = remove_isomer_descriptors_from_names
+  )
   
-  mz_num <- parse_num_robust(cd_raw[[mz_col]])
-  rt_num <- parse_num_robust(cd_raw[[rt_col]])
+  mz_num <- if (!is.na(mz_col)) parse_num_robust(cd_raw[[mz_col]]) else rep(NA_real_, nrow(cd_raw))
+  rt_num <- if (!is.na(rt_col)) parse_num_robust(cd_raw[[rt_col]]) else rep(NA_real_, nrow(cd_raw))
   
   mz_txt <- ifelse(is.finite(mz_num), format(round(mz_num, mz_digits), nsmall = mz_digits, trim = TRUE), NA_character_)
   rt_txt <- ifelse(is.finite(rt_num), format(round(rt_num, rt_digits), nsmall = rt_digits, trim = TRUE), NA_character_)
+  row_id <- paste0("row", seq_len(nrow(cd_raw)))
   
   display_raw <- case_when(
     !is.na(Name_canon) ~ Name_canon,
     is.na(Name_canon) & !is.na(Formula_clean) & !is.na(mz_txt) & !is.na(rt_txt) ~ paste0(Formula_clean, "_mz", mz_txt, "_rt", rt_txt),
     is.na(Name_canon) & !is.na(Formula_clean) & !is.na(mz_txt) ~ paste0(Formula_clean, "_mz", mz_txt),
-    TRUE ~ NA_character_
+    TRUE ~ row_id
   )
   
   feature_tbl <- tibble(
@@ -142,128 +146,40 @@ clean_sample_from_area_col <- function(x) {
   s
 }
 
-clean_sample_from_prefixed_file_col <- function(x) {
-  s <- str_remove(x, "^.+?\\s*:\\s*") %>% str_trim()
+is_primary_ms_area_col <- function(x) {
+  s <- str_remove(x, "^Area\\s*:\\s*") %>% str_trim()
   s <- str_replace(s, "(?i)\\.raw.*$", "")
   s <- str_replace(s, "\\s*\\(.*\\)$", "")
   s <- str_trim(s)
 
-  if (str_detect(s, "^QC")) return(s)
-  if (str_detect(s, "_")) s <- str_split_fixed(s, "_", 2)[, 1]
-
-  s
+  str_detect(s, "(^|_)MS(_|$)") && !str_detect(s, regex("ddMS|MS2", ignore_case = TRUE))
 }
 
-first_nonmissing_value <- function(x) {
-  x <- as.character(x)
-  x <- trimws(x)
-  x <- x[!is.na(x) & nzchar(x) & !tolower(x) %in% c("na", "n/a", "null", "nan")]
-  if (length(x) == 0) return(NA_character_)
-  x[1]
-}
-
-parse_file_creation_value <- function(x) {
-  x <- trimws(as.character(x))
-  if (length(x) == 0 || is.na(x) || !nzchar(x)) return(NA_real_)
-
-  numeric_value <- suppressWarnings(as.numeric(x))
-  if (is.finite(numeric_value)) return(numeric_value)
-
-  formats <- c(
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d %H:%M",
-    "%Y/%m/%d %H:%M:%S",
-    "%Y/%m/%d %H:%M",
-    "%d/%m/%Y %H:%M:%S",
-    "%d/%m/%Y %H:%M",
-    "%m/%d/%Y %H:%M:%S",
-    "%m/%d/%Y %H:%M",
-    "%Y-%m-%d",
-    "%d/%m/%Y",
-    "%m/%d/%Y"
-  )
-
-  for (fmt in formats) {
-    parsed <- suppressWarnings(as.POSIXct(x, format = fmt, tz = "UTC"))
-    if (!is.na(parsed)) return(as.numeric(parsed))
-  }
-
-  NA_real_
-}
-
-detect_injection_order_from_file_creation <- function(cd_raw, area_cols, clean_names) {
-  creation_pattern <- paste0(
-    "(?i)^\\s*",
-    "(file\\s*)?",
-    "(creation|created|created\\s+date|created\\s+time|creation\\s+date|creation\\s+time|",
-    "acquisition\\s+date|acquisition\\s+time|acquired|acquired\\s+date|acquired\\s+time|",
-    "injection\\s+date|injection\\s+time|run\\s+date|run\\s+time)",
-    "\\s*:"
-  )
-
-  candidate_cols <- names(cd_raw)[str_detect(names(cd_raw), creation_pattern)]
-  if (length(candidate_cols) == 0) {
-    return(NULL)
-  }
-
-  candidate_tbl <- tibble(
-    creation_col = candidate_cols,
-    sample = make.unique(map_chr(candidate_cols, clean_sample_from_prefixed_file_col), sep = "__rep"),
-    creation_raw = map_chr(candidate_cols, ~first_nonmissing_value(cd_raw[[.x]]))
-  ) %>%
-    filter(sample %in% clean_names) %>%
-    mutate(creation_value = map_dbl(creation_raw, parse_file_creation_value)) %>%
-    filter(is.finite(creation_value))
-
-  if (nrow(candidate_tbl) < 2) {
-    return(NULL)
-  }
-
-  sample_order_tbl <- tibble(
-    sample = clean_names,
-    area_col = area_cols,
-    fallback_order = seq_along(clean_names)
-  ) %>%
-    left_join(candidate_tbl %>% select(sample, creation_col, creation_raw, creation_value), by = "sample") %>%
-    arrange(is.na(creation_value), creation_value, fallback_order) %>%
-    mutate(injection_order_from_data = row_number()) %>%
-    arrange(fallback_order)
-
-  list(
-    order = sample_order_tbl$injection_order_from_data,
-    audit = sample_order_tbl,
-    source = "file_creation_column"
-  )
-}
-
-build_assay_from_cd <- function(cd_raw, feature_tbl, metadata, paths) {
-  area_cols <- names(cd_raw)[str_detect(names(cd_raw), "^Area\\s*:")]
+build_assay_from_cd <- function(cd_raw,
+                                feature_tbl,
+                                metadata,
+                                paths,
+                                require_qc = TRUE,
+                                require_injection_order = FALSE,
+                                export_intermediate_tables = FALSE) {
+  area_cols_all <- names(cd_raw)[str_detect(names(cd_raw), "^Area\\s*:")]
   
-  if (length(area_cols) == 0) {
+  if (length(area_cols_all) == 0) {
     stop("No 'Area:' columns found.")
   }
+
+  area_clean_all <- map_chr(area_cols_all, clean_sample_from_area_col)
+  area_is_primary_ms <- map_lgl(area_cols_all, is_primary_ms_area_col)
+  area_has_primary_ms <- area_clean_all %in% names(which(tapply(area_is_primary_ms, area_clean_all, any)))
+  area_is_duplicate_sample <- duplicated(area_clean_all) | duplicated(area_clean_all, fromLast = TRUE)
+  area_keep <- !(area_is_duplicate_sample & area_has_primary_ms & !area_is_primary_ms)
+  area_cols <- area_cols_all[area_keep]
   
   clean_names <- make.unique(map_chr(area_cols, clean_sample_from_area_col), sep = "__rep")
-  file_creation_order <- detect_injection_order_from_file_creation(cd_raw, area_cols, clean_names)
-  injection_order_from_data <- if (!is.null(file_creation_order)) {
-    file_creation_order$order
-  } else {
-    seq_along(area_cols)
+  sample_map <- tibble(area_col = area_cols, sample = clean_names)
+  if (isTRUE(export_intermediate_tables)) {
+    write_csv_safe(sample_map, file.path(paths$global$exports, "01_area_column_to_sample_map.csv"))
   }
-  sample_map <- tibble(
-    area_col = area_cols,
-    sample = clean_names,
-    injection_order_from_data = injection_order_from_data,
-    injection_order_source = if (!is.null(file_creation_order)) "file_creation_column" else "area_column_position"
-  )
-  if (!is.null(file_creation_order)) {
-    sample_map <- sample_map %>%
-      left_join(
-        file_creation_order$audit %>% select(sample, creation_col, creation_raw),
-        by = "sample"
-      )
-  }
-  write_csv_safe(sample_map, file.path(paths$global$exports, "01_area_column_to_sample_map.csv"))
   
   cd_area <- cd_raw %>%
     select(all_of(area_cols)) %>%
@@ -290,24 +206,106 @@ build_assay_from_cd <- function(cd_raw, feature_tbl, metadata, paths) {
     filter(sample %in% common) %>%
     slice(match(assay_df$sample, sample))
 
-  data_order_map <- sample_map %>% select(sample, injection_order_from_data)
-  data_injection_order <- data_order_map$injection_order_from_data[match(metadata_aligned$sample, data_order_map$sample)]
-  missing_data_order <- !is.finite(data_injection_order)
-  data_injection_order[missing_data_order] <- seq_len(nrow(metadata_aligned))[missing_data_order]
-  if (!("injection_order" %in% names(metadata_aligned))) {
-    metadata_aligned$injection_order <- data_injection_order
-  } else {
-    metadata_aligned$injection_order <- suppressWarnings(as.numeric(metadata_aligned$injection_order))
-    missing_order <- !is.finite(metadata_aligned$injection_order)
-    metadata_aligned$injection_order[missing_order] <- data_injection_order[missing_order]
+  input_order_candidate_paths <- unique(c(
+    file.path("data", "Input Files.xlsx"),
+    list.files("data", pattern = "^input_order.*\\.xlsx$", full.names = TRUE, ignore.case = TRUE)
+  ))
+  input_order_candidate_paths <- input_order_candidate_paths[file.exists(input_order_candidate_paths)]
+  input_order_candidates <- lapply(input_order_candidate_paths, function(path) {
+    ref <- read_input_files_reference(path)
+    if (is.null(ref) || nrow(ref) == 0) {
+      return(NULL)
+    }
+    ref$input_order_path <- path
+    ref
+  })
+  input_order_candidates <- Filter(Negate(is.null), input_order_candidates)
+
+  input_files_ref <- NULL
+  if (length(input_order_candidates) > 0) {
+    match_scores <- vapply(
+      input_order_candidates,
+      function(ref) sum(metadata_aligned$sample %in% ref$sample),
+      numeric(1)
+    )
+    best_idx <- which.max(match_scores)
+    if (length(best_idx) > 0 && is.finite(match_scores[best_idx]) && match_scores[best_idx] > 0) {
+      input_files_ref <- input_order_candidates[[best_idx]]
+      message(
+        "  - Injection order reference selected: ",
+        unique(input_files_ref$input_order_path)[1],
+        " (matched ",
+        match_scores[best_idx],
+        " aligned sample(s))."
+      )
+    }
   }
-  
-  write_csv_safe(metadata_aligned, file.path(paths$global$exports, "04_sampleData_aligned.csv"))
+
+  drift_injection_order <- rep(NA_real_, nrow(metadata_aligned))
+  drift_injection_order_source <- if (isTRUE(require_injection_order)) {
+    "required_real_injection_order_not_available"
+  } else {
+    "fallback_aligned_row_order"
+  }
+  missing_injection_order_samples <- metadata_aligned$sample
+  if (!is.null(input_files_ref)) {
+    order_map <- input_files_ref %>%
+      mutate(sample_key = clean_input_file_sample_name(sample)) %>%
+      distinct(sample_key, .keep_all = TRUE)
+
+    drift_injection_order <- order_map$input_order[match(metadata_aligned$sample, order_map$sample_key)]
+    missing_injection_order_samples <- metadata_aligned$sample[!is.finite(drift_injection_order)]
+    if (length(missing_injection_order_samples) == 0) {
+      drift_injection_order_source <- paste0(
+        "input_files_reference:",
+        unique(input_files_ref$input_order_source)[1]
+      )
+    }
+  }
+
+  if (any(!is.finite(drift_injection_order))) {
+    if (isTRUE(require_injection_order)) {
+      details <- if (is.null(input_files_ref)) {
+          "No usable injection order file was found."
+      } else {
+        paste0(
+          "Missing injection order for ",
+          length(missing_injection_order_samples),
+          " aligned sample(s): ",
+          paste(head(missing_injection_order_samples, 12), collapse = ", "),
+          if (length(missing_injection_order_samples) > 12) ", ..." else "",
+          "."
+        )
+      }
+
+        stop(
+          "Real injection order is required and must be complete for normalization_mode = 'qcrsc' or 'qc_loess'. ",
+          details,
+          " Please provide data/Input Files.xlsx or data/input_order*.xlsx with all aligned sample names and a real injection order ",
+          "(either an Order column or file creation date/time that can be sorted). Fallback to aligned row order is only allowed ",
+          "for modes without drift correction."
+        )
+      }
+
+    drift_injection_order <- seq_len(nrow(metadata_aligned))
+    message("  - Drift-correction input-file reference not found or incomplete; falling back to current aligned row order.")
+  }
+
+  drift_order_debug <- tibble(
+    sample = metadata_aligned$sample,
+    type = metadata_aligned$type,
+    injection_order = drift_injection_order
+  )
+
+  if (isTRUE(export_intermediate_tables)) {
+    write_csv_safe(metadata_aligned, file.path(paths$global$exports, "04_sampleData_aligned.csv"))
+    write_csv_safe(drift_order_debug, file.path(paths$global$exports, "00_drift_injection_order_used.csv"))
+  }
   
   qc_idx <- which(metadata_aligned$type == "QC")
   sample_idx <- which(metadata_aligned$type == "Sample")
-  
-  if (length(qc_idx) < 2) stop("Need at least 2 QCs.")
+
+  if (isTRUE(require_qc) && length(qc_idx) < 2) stop("Need at least 2 QCs.")
   if (length(sample_idx) < 2) stop("Need at least 2 biological samples.")
   
   assay_num <- as.matrix(assay_df %>% select(-sample))
@@ -318,6 +316,9 @@ build_assay_from_cd <- function(cd_raw, feature_tbl, metadata, paths) {
     assay_num_raw = assay_num,
     metadata_aligned = metadata_aligned,
     qc_idx = qc_idx,
-    sample_idx = sample_idx
+    sample_idx = sample_idx,
+    drift_injection_order = drift_injection_order,
+    drift_injection_order_source = drift_injection_order_source,
+    missing_injection_order_samples = missing_injection_order_samples
   )
 }

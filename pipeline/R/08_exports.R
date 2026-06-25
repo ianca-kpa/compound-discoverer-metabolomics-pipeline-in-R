@@ -27,40 +27,51 @@ rename_feature_cols <- function(df, feature_tbl, sample_col = "sample") {
   out
 }
 
-# This function creates two CSV files for a given model:
-  # 1. One with only Sample type (no QC), named "MA_ACTIVE_log2_NO_QC_model_<model_name>.csv"
-  # 2. One with both Sample and QC types, named "MA_ACTIVE_log2_WITH_QC_model_<model_name>.csv"
+# Build a MetaboAnalyst-ready export table from the raw assay and aligned metadata.
+build_metaboanalyst_export_df <- function(raw_df,
+                                          metadata_aligned,
+                                          feature_tbl) {
+  df_named <- rename_feature_cols(raw_df, feature_tbl, sample_col = "sample")
 
-export_metaboanalyst_one_model <- function(log2_df,
-                                           metadata_aligned,
-                                           feature_tbl,
-                                           model_name,
-                                           export_dir,
-                                           log_path = NULL) {
-  
-  df_named <- rename_feature_cols(log2_df, feature_tbl, sample_col = "sample")
-
-  df <- df_named %>%
+  df_named %>%
     dplyr::left_join(
-      metadata_aligned %>% dplyr::select(sample, type, group, model),
+      metadata_aligned %>%
+        dplyr::transmute(
+          sample,
+          type,
+          model,
+          group,
+          sex,
+          model_group = dplyr::if_else(type == "QC", "QC", paste(model, group, sep = "-")),
+          Class = dplyr::if_else(type == "QC", "QC", model_group)
+        ),
       by = "sample"
-    ) %>%
-    dplyr::mutate(
-      Class = dplyr::if_else(
-        type == "QC",
-        "QC",
-        map_comparison_group_display_values(group, model_name = model_name)
-      )
     )
+}
 
-  # Create export directory if it doesn't exist
+# Export a single global MetaboAnalyst table from the raw assay.
+# Two CSV files are written:
+# 1. One with only Sample type (no QC), named "MA_ACTIVE_raw_GLOBAL_NO_QC.csv"
+# 2. One with both Sample and QC types, named "MA_ACTIVE_raw_GLOBAL_WITH_QC.csv"
+export_metaboanalyst_global_raw <- function(raw_df,
+                                            metadata_aligned,
+                                            feature_tbl,
+                                            export_dir,
+                                            log_path = NULL,
+                                            value_label = "raw",
+                                            file_prefix = "MA_ACTIVE",
+                                            include_with_qc = TRUE) {
+  df <- build_metaboanalyst_export_df(raw_df, metadata_aligned, feature_tbl)
+
+  # Create export directory if it doesn't exist.
   dir.create(export_dir, recursive = TRUE, showWarnings = FALSE)
 
   df_no_qc <- df %>%
-    dplyr::filter(type == "Sample", model == model_name) %>%
-    dplyr::select(sample, Class, dplyr::everything(), -type, -group, -model)
+    dplyr::filter(type == "Sample") %>%
+    dplyr::select(-type) %>%
+    dplyr::relocate(Class, model_group, model, group, sex, .after = sample)
 
-  out_no_qc <- file.path(export_dir, paste0("MA_ACTIVE_log2_NO_QC_model_", model_name, ".csv"))
+  out_no_qc <- file.path(export_dir, paste0(file_prefix, "_", value_label, "_GLOBAL_NO_QC.csv"))
   if (nrow(df_no_qc) >= 2) {
     write_csv_safe(df_no_qc, out_no_qc)
     if (!is.null(log_path)) {
@@ -68,28 +79,30 @@ export_metaboanalyst_one_model <- function(log2_df,
         log_path,
         out_no_qc,
         df_no_qc,
-        note = paste0("MetaboAnalyst export (ACTIVE, log2, NO_QC) | model=", model_name)
+        note = paste0("MetaboAnalyst export (GLOBAL, ", value_label, ", NO_QC)")
       )
     }
   }
 
-  df_with_qc <- df %>%
-    dplyr::filter(model == model_name | type == "QC") %>%
-    dplyr::select(sample, Class, dplyr::everything(), -type, -group, -model)
+  if (isTRUE(include_with_qc)) {
+    df_with_qc <- df %>%
+      dplyr::select(-type) %>%
+      dplyr::relocate(Class, model_group, model, group, sex, .after = sample)
 
-  # With QC samples, but only if there are at least 2 rows (MetaboAnalyst requires at least 2 samples).
-  out_with_qc <- file.path(export_dir, paste0("MA_ACTIVE_log2_WITH_QC_model_", model_name, ".csv"))
-  if (nrow(df_with_qc) >= 2) {
-    write_csv_safe(df_with_qc, out_with_qc)
-    if (!is.null(log_path)) {
-      log_written_object(
-        log_path,
-        out_with_qc,
-        df_with_qc,
-        note = paste0("MetaboAnalyst export (ACTIVE, log2, WITH_QC) | model=", model_name)
-      )
+    # With QC samples, but only if there are at least 2 rows (MetaboAnalyst requires at least 2 samples).
+    out_with_qc <- file.path(export_dir, paste0(file_prefix, "_", value_label, "_GLOBAL_WITH_QC.csv"))
+    if (nrow(df_with_qc) >= 2) {
+      write_csv_safe(df_with_qc, out_with_qc)
+      if (!is.null(log_path)) {
+        log_written_object(
+          log_path,
+          out_with_qc,
+          df_with_qc,
+          note = paste0("MetaboAnalyst export (GLOBAL, ", value_label, ", WITH_QC)")
+        )
+      }
     }
   }
 
-  message("  ✓ MetaboAnalyst exports created for model ", model_name, ": ", export_dir)
+  message("  ✓ Global MetaboAnalyst exports created: ", export_dir)
 }

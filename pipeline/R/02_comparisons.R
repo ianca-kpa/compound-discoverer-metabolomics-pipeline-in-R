@@ -63,7 +63,7 @@ COMPARISON_CONFIGS <- list(
     pca_color_var = "sex",
     pca_shape_var = NULL,
     prefix = "TG_FvsM",
-    label = paste0("F vs M within ", comparison_group_treatment)
+    label = paste0("FvsM within ", comparison_group_treatment)
   ),
   
   "WT_FvsM" = list(
@@ -77,7 +77,7 @@ COMPARISON_CONFIGS <- list(
     pca_color_var = "sex",
     pca_shape_var = NULL,
     prefix = "WT_FvsM",
-    label = paste0("F vs M within ", comparison_group_control)
+    label = paste0("FvsM within ", comparison_group_control)
   )
 )
 

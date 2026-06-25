@@ -3,17 +3,17 @@
 # Duplicate handling
 # =============================================================================
 
-# Functions for handling duplicate named features in the feature table, based
-# on the settings specified in pipeline/config/settings.R.
+# Functions for handling duplicate features in the feature table, based on the
+# settings specified in config/settings.R.
 #
 # The main function is collapse_duplicate_names(), which takes the assay matrix
 # and feature table, identifies duplicates based on the "Name_canon" column,
 # and handles them according to the specified strategy:
-# - reference_or_best_qc_rsd: reference-table RT match, then best QC RSD
-# - collapse_best_qc_rsd: keep the duplicate with the best QC RSD
-# - collapse_mean: average duplicate feature intensities
-# - collapse_sum: sum duplicate feature intensities
-# - keep_separate: keep duplicate features separate
+# - reference_or_best_qc_rsd
+# - keep_separate
+# - collapse_mean
+# - collapse_sum
+# - collapse_best_qc_rsd
 #
 # An audit table is also generated to show how duplicates were handled.
 
@@ -222,7 +222,8 @@ if (strategy == "reference_or_best_qc_rsd") {
       "nicotinamideadeninedinucleotideh" = "nadh",
       "acetyllcarnitine" = "acetylcarnitine",
       "glutamicacid" = "glutamate",
-      "asparticacid" = "aspartate"
+      "asparticacid" = "aspartate",
+      "gaba" = "gammaaminobutyricacid"
     )
 
     mapped <- unname(synonym_map[keys])
