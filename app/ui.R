@@ -1,6 +1,7 @@
 ui <- fluidPage(
   shinyjs::useShinyjs(),
   tags$head(
+    tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
     tags$link(
       rel = "stylesheet",
       href = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap"
@@ -245,10 +246,10 @@ ui <- fluidPage(
           tabPanel(
             "Results Gallery",
             tags$div(
-              style = "display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;",
+              class = "results-gallery-toolbar",
               h4(style = "margin:0;", "Results Gallery"),
               tags$div(
-                style = "display:flex; align-items:center; gap:8px; flex-wrap:wrap;",
+                class = "results-gallery-actions",
                 tags$div(
                   class = "results-filter-control",
                   selectInput(
