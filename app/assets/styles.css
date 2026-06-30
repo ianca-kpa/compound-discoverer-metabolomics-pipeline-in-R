@@ -12,6 +12,8 @@
 html {
 	overflow-y: scroll;
 	scrollbar-gutter: stable;
+	-webkit-text-size-adjust: 100%;
+	max-width: 100%;
 }
 
 body {
@@ -21,18 +23,45 @@ body {
 		radial-gradient(1400px 600px at -10% -20%, #dceaff 0%, transparent 70%),
 		radial-gradient(1200px 500px at 120% 0%, #fce7c3 0%, transparent 70%),
 		linear-gradient(130deg, var(--bg-a) 0%, var(--bg-b) 100%);
+	min-width: 320px;
+	overflow-x: hidden;
+	max-width: 100%;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+img,
+svg,
+canvas,
+video {
+	max-width: 100%;
+}
+
+.container-fluid {
+	width: 100%;
+	max-width: 100%;
+	padding-left: 0;
+	padding-right: 0;
+	overflow-x: hidden;
 }
 
 .app-shell {
 	margin-top: 18px;
 	width: 100%;
-	max-width: none;
+	max-width: 1600px;
 	margin-left: auto;
 	margin-right: auto;
 	padding: 0 12px;
 }
 
 .layout-shell > .row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
 	margin-left: 0;
 	margin-right: 0;
 }
@@ -40,6 +69,74 @@ body {
 .layout-shell > .row > [class*="col-"] {
 	padding-left: 6px;
 	padding-right: 6px;
+	min-width: 0;
+}
+
+.control-card,
+.content-card,
+.content-card .tab-content,
+.tab-pane,
+.shiny-bound-output,
+.shiny-html-output {
+	min-width: 0;
+	max-width: 100%;
+}
+
+.content-card {
+	min-width: 0;
+}
+
+.content-card .tab-content,
+.dataTables_wrapper,
+.table,
+table {
+	overflow-wrap: anywhere;
+}
+
+.content-card .shiny-html-output,
+.content-card .shiny-bound-output {
+	overflow-x: auto;
+}
+
+.content-card table,
+.content-card .table {
+	width: 100%;
+	max-width: 100%;
+}
+
+.content-card pre,
+#pipeline_log_box {
+	max-width: 100%;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.form-control,
+.selectize-control,
+.selectize-input,
+.selectize-dropdown,
+.shiny-input-container {
+	max-width: 100%;
+}
+
+.btn {
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+.nav-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.nav-tabs > li {
+	float: none;
+	margin-bottom: 0;
+}
+
+.nav-tabs > li > a {
+	margin-right: 0;
 }
 
 @media (max-width: 1200px) {
@@ -52,6 +149,7 @@ body {
 		width: 100%;
 		max-width: 100%;
 		flex: 0 0 100%;
+		float: none;
 	}
 
 	.content-card {
@@ -157,6 +255,7 @@ body {
 .hero p {
 	margin: 0;
 	opacity: 0.95;
+	overflow-wrap: anywhere;
 }
 
 .well,
@@ -779,6 +878,7 @@ body {
 	gap: 0;
 	width: 100%;
 	overflow: hidden;
+	min-width: 0;
 }
 
 .output-dir-button-wrap {
@@ -872,6 +972,24 @@ body {
 
 .results-filter-control select {
 	min-height: 34px;
+}
+
+.results-gallery-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 10px;
+	min-width: 0;
+}
+
+.results-gallery-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	min-width: 0;
 }
 
 .results-state-bar {
@@ -978,7 +1096,7 @@ body {
 
 .results-gallery-layout {
 	display: grid;
-	grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.7fr);
+	grid-template-columns: minmax(220px, 0.85fr) minmax(0, 1.7fr);
 	gap: 14px;
 	align-items: start;
 }
@@ -1229,9 +1347,15 @@ pre {
 }
 
 @media (max-width: 992px) {
+	.app-shell {
+		padding-left: 10px;
+		padding-right: 10px;
+	}
+
 	.layout-shell > .row > .col-sm-5,
 	.layout-shell > .row > .col-sm-7 {
 		width: 100%;
+		max-width: 100%;
 		float: none;
 	}
 
@@ -1244,6 +1368,45 @@ pre {
 @media (max-width: 768px) {
 	body {
 		font-size: 14px;
+	}
+
+	.layout-shell > .row > [class*="col-"] {
+		padding-left: 0;
+		padding-right: 0;
+	}
+
+	.nav-tabs {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		padding-bottom: 4px;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	.nav-tabs > li {
+		flex: 0 0 auto;
+	}
+
+	.nav-tabs > li > a {
+		padding: 8px 10px;
+		white-space: nowrap;
+	}
+
+	.results-gallery-toolbar {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.results-gallery-actions {
+		justify-content: stretch;
+	}
+
+	.results-filter-control,
+	.results-filter-control .form-group,
+	.results-filter-control .shiny-input-container,
+	.results-filter-control .selectize-control,
+	.results-filter-control select,
+	.results-gallery-actions .btn {
+		width: 100% !important;
 	}
 
 	.grid-2x2,
@@ -1297,12 +1460,43 @@ pre {
 	}
 
 	.output-dir-input-wrap input {
-		border-radius: 0 10px 10px 0;
-		margin-left: -1px;
+		border-radius: 0 0 10px 10px;
+		margin-left: 0;
+	}
+
+	.output-dir-button-wrap .btn,
+	.output-dir-button-wrap .btn-default,
+	.output-dir-button-wrap button {
+		border-radius: 10px 10px 0 0;
+	}
+
+	.gallery-modal-image-wrap {
+		gap: 6px;
+	}
+
+	.gallery-modal-nav {
+		width: 38px;
+		height: 38px;
+		font-size: 30px;
+		flex: 0 0 38px;
+	}
+
+	.gallery-modal-image {
+		max-width: calc(100vw - 110px);
+		max-height: 70vh;
 	}
 }
 
 @media (max-width: 576px) {
+	.app-shell {
+		padding-left: 6px;
+		padding-right: 6px;
+	}
+
+	.hero {
+		margin-bottom: 10px;
+	}
+
 	.big-file-input .input-group {
 		display: block;
 	}
@@ -1332,6 +1526,34 @@ pre {
 	.settings-section-card,
 	.settings-guide-card,
 	.content-card .tab-content {
-		padding: 10px;
+		padding: 8px;
+	}
+
+	.well,
+	.control-card,
+	.content-card .tab-content {
+		border-radius: 10px;
+	}
+
+	.preflight-item {
+		grid-template-columns: 1fr;
+		align-items: start;
+	}
+
+	.preflight-status {
+		width: fit-content;
+	}
+
+	.results-state-bar {
+		gap: 6px;
+		padding: 8px;
+	}
+
+	.gallery-modal-close-x {
+		top: -8px;
+		right: -8px;
+		width: 30px;
+		height: 30px;
+		font-size: 20px;
 	}
 }
