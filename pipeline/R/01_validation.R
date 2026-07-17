@@ -14,6 +14,7 @@ apply_missing_setting_defaults <- function() {
     metadata_sheet = 1,
     reference_sheet = 1,
     reference_path = "",
+    injection_order_path = "",
     reference_col_metabolite = "",
     reference_col_ref_ion = "",
     reference_col_mz = "",

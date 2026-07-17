@@ -206,8 +206,16 @@ build_assay_from_cd <- function(cd_raw,
     filter(sample %in% common) %>%
     slice(match(assay_df$sample, sample))
 
+  injection_order_config_path <- if (exists("injection_order_path", inherits = TRUE)) {
+    trimws(as.character(get("injection_order_path", inherits = TRUE))[1])
+  } else {
+    ""
+  }
+
   input_order_candidate_paths <- unique(c(
+    if (nzchar(injection_order_config_path)) injection_order_config_path else character(0),
     file.path("data", "Input Files.xlsx"),
+    list.files("data", pattern = "^.*inputfiles.*\\.xlsx$", full.names = TRUE, ignore.case = TRUE),
     list.files("data", pattern = "^input_order.*\\.xlsx$", full.names = TRUE, ignore.case = TRUE)
   ))
   input_order_candidate_paths <- input_order_candidate_paths[file.exists(input_order_candidate_paths)]

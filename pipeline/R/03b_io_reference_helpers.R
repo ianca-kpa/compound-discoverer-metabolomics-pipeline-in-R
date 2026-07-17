@@ -77,7 +77,14 @@ read_input_files_reference <- function(path = file.path("data", "Input Files.xls
 
   ref <- tryCatch(
     read_any_table(path, sheet = sheet),
-    error = function(e) NULL
+    error = function(e) {
+      ext <- tolower(tools::file_ext(path))
+      if (ext %in% c("xlsx", "xls", "xlsm")) {
+        tryCatch(read_any_table(path, sheet = 1), error = function(e2) NULL)
+      } else {
+        NULL
+      }
+    }
   )
 
   if (is.null(ref) || nrow(ref) == 0) {

@@ -466,7 +466,12 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
     }
 
     variants$ACTIVE <- variants[[active_variant_effective]]
-    step_info("Active variant selected: ", active_variant_effective, " | n_features=", ncol(variants$ACTIVE$mat))
+    active_variant_log_note <- if (identical(active_variant_effective, "BASE")) {
+      " (base = filtered matrix before QC-RSD threshold variants)"
+    } else {
+      ""
+    }
+    step_info("Active variant selected: ", active_variant_effective, active_variant_log_note, " | n_features=", ncol(variants$ACTIVE$mat))
 
     if (debug_mode) {
       out_post_rsd_mat <- file.path(
@@ -967,7 +972,7 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
     variants$ACTIVE$mat_technical_with_qc <- mat_active_normalized_technical
     variants$ACTIVE$mat <- mat_active_normalized_bio
 
-    step_info("ACTIVE variant selected: ", active_variant_effective)
+    step_info("ACTIVE variant selected: ", active_variant_effective, active_variant_log_note)
     step_info("Technical ACTIVE matrix with QC after normalization: ", fmt_dims(mat_active_normalized_technical))
     step_info("Final biological ACTIVE matrix without QC: ", fmt_dims(variants$ACTIVE$mat))
     step_info("Duplicate strategy: ", duplicate_name_strategy)

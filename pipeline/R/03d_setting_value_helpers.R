@@ -220,12 +220,21 @@ setting_default_numeric_vector <- function(value) {
 }
 
 # Encoding helpers
+encode_r_string <- function(value) {
+  value <- gsub("\\\\", "\\\\\\\\", as.character(value))
+  value <- gsub("\"", "\\\\\"", value, fixed = TRUE)
+  paste0("\"", value, "\"")
+}
+
 encode_text <- function(value, nullable = FALSE) {
   value <- safe_trimws(value)
-  if (!nzchar(value) || (nullable && toupper(value) == "NULL")) {
+  if (nullable && (!nzchar(value) || toupper(value) == "NULL")) {
     return("NULL")
   }
-  dQuote(value)
+  if (!nzchar(value)) {
+    return('""')
+  }
+  encode_r_string(value)
 }
 
 encode_logical <- function(value) {
@@ -257,7 +266,7 @@ encode_sheet <- function(value) {
   if (grepl("^-?[0-9]+(\\.[0]+)?$", value)) {
     as.character(as.integer(round(as.numeric(value))))
   } else {
-    dQuote(value)
+    encode_r_string(value)
   }
 }
 
@@ -267,7 +276,7 @@ encode_vector_text <- function(value, allow_null = FALSE) {
   if (length(items) == 0) {
     return(if (allow_null) "NULL" else "c()")
   }
-  paste0("c(", paste(dQuote(items), collapse = ", "), ")")
+  paste0("c(", paste(vapply(items, encode_r_string, character(1)), collapse = ", "), ")")
 }
 
 encode_vector_numeric <- function(value) {
