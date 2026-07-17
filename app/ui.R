@@ -79,6 +79,7 @@ ui <- fluidPage(
             )
           )
         ),
+        uiOutput("injection_order_requirement_hint"),
         uiOutput("allowed_metadata_groups_ui"),
         checkboxInput(
           "manual_metadata_cols",

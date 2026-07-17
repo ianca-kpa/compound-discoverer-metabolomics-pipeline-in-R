@@ -43,6 +43,7 @@ render_builder_control <- function(spec, dynamic_choices = list()) {
     checkbox = initial_setting_logical(spec_key, default = isTRUE(spec$default)),
     logical_select = if (initial_setting_logical(spec_key, default = isTRUE(spec$default))) "TRUE" else "FALSE",
     numeric = initial_setting_numeric(spec_key, default = spec$default),
+    numeric_or_inf = initial_setting_value(spec_key, default = as.character(spec$default)),
     integer = initial_setting_numeric(spec_key, default = spec$default),
     multiselect = setting_default_vector(initial_setting_value(spec_key, default = spec$default)),
     vector_numeric = setting_default_numeric_vector(initial_setting_value(spec_key, default = spec$default)),
@@ -70,6 +71,15 @@ render_builder_control <- function(spec, dynamic_choices = list()) {
       min = spec$min,
       max = spec$max,
       step = if (!is.null(spec$step)) spec$step else 0.1
+    ),
+    numeric_or_inf = selectInput(
+      input_id,
+      spec_label,
+      choices = vector_choices,
+      selected = {
+        value_chr <- trimws(to_scalar(value, fallback = as.character(spec$default)))
+        if (!nzchar(value_chr)) as.character(spec$default) else value_chr
+      }
     ),
     integer = numericInput(
       input_id,
@@ -336,6 +346,7 @@ build_settings_builder_ui <- function(dynamic_choices = list()) {
     }
 
     list(
+      key = tab_key,
       label = as.character(label)[1],
       sections = as.character(sections),
       widths = widths,
@@ -394,10 +405,18 @@ build_settings_builder_ui <- function(dynamic_choices = list()) {
     c(
       list(id = "settings_builder_group", type = "tabs"),
       lapply(tab_layouts, function(layout) {
+        tab_classes <- c("settings-tab-pane")
+        if (isTRUE(layout$narrow)) {
+          tab_classes <- c(tab_classes, "settings-tab-pane-narrow")
+        }
+        if (identical(layout$key, "exports")) {
+          tab_classes <- c(tab_classes, "settings-tab-pane-exports")
+        }
+
         tabPanel(
           layout$label,
           tags$div(
-            class = if (isTRUE(layout$narrow)) "settings-tab-pane settings-tab-pane-narrow" else "settings-tab-pane",
+            class = paste(tab_classes, collapse = " "),
             make_columns(cards_from_sections(layout$sections), widths = layout$widths)
           )
         )

@@ -2,6 +2,8 @@
 
 # Compute project/pipeline paths early so we can ensure packages are
 # installed before attempting to load libraries used by the app.
+options(useFancyQuotes = FALSE)
+
 project_root <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
 pipeline_root <- file.path(project_root, "pipeline")
 r_dir <- file.path(pipeline_root, "R")
@@ -245,6 +247,21 @@ settings_form_sections <- list(
     fields = list(
       list(key = "make_volcano_plots", label = "Pairwise volcano plots", type = "logical_select", default = TRUE),
       list(key = "volcano_add_labels", label = "Add volcano labels", type = "logical_select", default = TRUE),
+      list(
+        key = "volcano_label_number",
+        label = "Volcano label count",
+        type = "numeric_or_inf",
+        default = Inf,
+        choices = c(
+          "All significant (Inf)" = "Inf",
+          "Top 10" = "10",
+          "Top 20" = "20",
+          "Top 30" = "30",
+          "Top 50" = "50",
+          "Top 100" = "100"
+        ),
+        condition = "input.settings_volcano_add_labels == 'TRUE'"
+      ),
       list(key = "volcano_add_cutoff_lines", label = "Add cutoff lines", type = "logical_select", default = TRUE)
     )
   ),
@@ -337,6 +354,7 @@ settings_glossary_map <- c(
   heatmap_scale_method = "Scaling used inside heatmap matrices: none, zscore, or pareto.",
   make_volcano_plots = "When TRUE, generates volcano plots only for pairwise comparisons. MULTIGROUP_GLOBAL is always excluded because it has no directional effect.",
   volcano_add_labels = "When TRUE, labels significant points in volcano plots.",
+  volcano_label_number = "Maximum labels in volcano plots. Use Inf to label all significant metabolites, or set a number (for example 30) to show only top-ranked labels.",
   volcano_add_cutoff_lines = "When TRUE, draws cutoff guide lines on volcano plots.",
   export_metaboanalyst_ready = "When TRUE, writes the main MetaboAnalyst-compatible export.",
   save_stats_excel_per_model = "When TRUE, writes one Excel stats workbook per model.",

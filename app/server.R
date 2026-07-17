@@ -77,6 +77,7 @@ server <- function(input, output, session) {
           checkbox = updateCheckboxInput(session, id, value = isTRUE(default)),
           logical_select = updateSelectInput(session, id, selected = if (isTRUE(default)) "TRUE" else "FALSE"),
           numeric = updateNumericInput(session, id, value = suppressWarnings(as.numeric(default)[1])),
+          numeric_or_inf = updateSelectInput(session, id, selected = as.character(default)[1]),
           integer = updateNumericInput(session, id, value = suppressWarnings(as.integer(default)[1])),
           select = updateSelectInput(session, id, selected = as.character(default)[1]),
           multiselect = updateSelectizeInput(session, id, selected = setting_default_vector(default)),
@@ -166,6 +167,18 @@ server <- function(input, output, session) {
         ),
         easyClose = TRUE
       ))
+    },
+    ignoreInit = TRUE
+  )
+
+  observeEvent(input[[setting_input_id("normalization_mode")]],
+    {
+      if (isTRUE(initializing()) || isTRUE(clearing_inputs())) {
+        return()
+      }
+
+      cfg <- build_settings_builder_config(current_config_text())
+      updateTextAreaInput(session, "config_text", value = normalize_config_text(cfg))
     },
     ignoreInit = TRUE
   )
@@ -290,6 +303,7 @@ server <- function(input, output, session) {
           checkbox = setting_value_logical(input_value),
           logical_select = setting_value_logical(identical(as.character(input_value)[1], "TRUE")),
           numeric = setting_value_numeric(input_value, default = spec$default),
+          numeric_or_inf = setting_value_numeric(input_value, default = spec$default),
           integer = setting_value_integer(input_value, default = spec$default),
           select = setting_value_text(input_value),
           multiselect = setting_value_vector_text(input_value),
@@ -496,7 +510,15 @@ server <- function(input, output, session) {
       copy_uploaded_file_to_data(input$reference_file, project_root)
     }
 
+    injection_order_path <- ""
+    if (!is.null(input$injection_order_file) &&
+        !is.null(input$injection_order_file$datapath) &&
+        nzchar(safe_trimws(input$injection_order_file$datapath))) {
+      injection_order_path <- file.path(project_root, "data", basename(input$injection_order_file$name))
+    }
+
     clean_config <- normalize_config_text(config_text)
+    clean_config <- replace_or_append(clean_config, "injection_order_path", setting_value_text(injection_order_path))
     writeLines(clean_config, active_config_path, useBytes = TRUE)
     updateTextAreaInput(session, "config_text", value = clean_config)
   }
@@ -573,6 +595,11 @@ server <- function(input, output, session) {
     cfg <- replace_or_append(cfg, "pvalue_correction_method", dQuote(derived_pvalue_correction))
     cfg <- replace_or_append(cfg, "output_level", dQuote(output_level_enabled()))
     cfg <- replace_or_append(cfg, "use_reference_file", if (isTRUE(input$use_reference_file)) "TRUE" else "FALSE")
+    cfg <- replace_or_append(
+      cfg,
+      "injection_order_path",
+      setting_value_text(if (has_current_injection_order_upload()) file.path(project_root, "data", basename(input$injection_order_file$name)) else "")
+    )
     cfg <- replace_or_append(cfg, "reference_col_metabolite", dQuote(safe_trimws(input$reference_col_metabolite)))
     cfg <- replace_or_append(cfg, "reference_col_ref_ion", dQuote(safe_trimws(input$reference_col_ref_ion)))
     cfg <- replace_or_append(cfg, "reference_col_mz", dQuote(safe_trimws(input$reference_col_mz)))
@@ -648,6 +675,45 @@ server <- function(input, output, session) {
       nzchar(safe_trimws(uploaded$datapath)) &&
       file.exists(uploaded$datapath)
   }
+
+  output$injection_order_requirement_hint <- renderUI({
+    mode <- current_normalization_mode(default = "none")
+    mode_label <- switch(mode,
+      qc_loess = "QC-LOESS",
+      qcrsc = "QC-RSC",
+      cyclic_loess = "Cyclic LOESS",
+      pqn_qc = "PQN-QC",
+      pqn_sample = "PQN Sample",
+      none = "None",
+      weight = "Weight",
+      mode
+    )
+
+    required <- mode %in% c("qc_loess", "qcrsc")
+    uploaded_ok <- has_current_injection_order_upload()
+
+    state_class <- if (!isTRUE(required)) {
+      "injection-order-hint-neutral"
+    } else if (isTRUE(uploaded_ok)) {
+      "injection-order-hint-ok"
+    } else {
+      "injection-order-hint-required"
+    }
+
+    tags$div(
+      class = paste("injection-order-hint", state_class),
+      tags$strong(if (isTRUE(required)) "Injection order required" else "Injection order not required"),
+      tags$span(
+        if (!isTRUE(required)) {
+          paste0(mode_label, " does not require a real injection order.")
+        } else if (isTRUE(uploaded_ok)) {
+          paste0(mode_label, " will use the uploaded injection order file.")
+        } else {
+          paste0(mode_label, " needs an injection order file before the pipeline can run.")
+        }
+      )
+    )
+  })
 
   normalized_output_dir <- function() {
     out <- sanitize_output_dir_path(input$output_dir)
@@ -737,6 +803,7 @@ server <- function(input, output, session) {
     cfg <- replace_or_append(cfg, "cd_file_path", dQuote(""))
     cfg <- replace_or_append(cfg, "metadata_path", dQuote(""))
     cfg <- replace_or_append(cfg, "reference_path", dQuote(""))
+    cfg <- replace_or_append(cfg, "injection_order_path", dQuote(""))
     updateTextAreaInput(session, "config_text", value = cfg)
     gallery_state$dir <- NULL
     gallery_state$prefix <- NULL

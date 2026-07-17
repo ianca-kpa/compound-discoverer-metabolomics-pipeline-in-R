@@ -43,6 +43,7 @@ setting_default_assignment <- function(key, value, type = "text") {
     checkbox = setting_value_logical(value),
     logical_select = setting_value_logical(value),
     numeric = setting_value_numeric(value, default = 0),
+    numeric_or_inf = setting_value_numeric(value, default = Inf),
     integer = setting_value_integer(value, default = 0L),
     multiselect = setting_value_vector_text(value),
     vector_numeric = setting_value_vector_numeric(value),
