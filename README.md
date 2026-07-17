@@ -273,7 +273,7 @@ CD-MetaboRefine includes a Settings Builder that allows users to configure the m
 
 (B) visual output settings for PCA, volcano plots, and heatmaps;
 
-![Settings Builder overview - Visual outputs](images/visual-overview.png)
+![Settings Builder overview - Visual outputs - NEW ](images/visual-overview.png)
 
 (C) export level configuration.
 
