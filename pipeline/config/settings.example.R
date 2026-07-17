@@ -13,6 +13,8 @@ cd_sheet <- 1                                  # options: sheet index or sheet n
 metadata_path <- "data/metadata_example.xlsx"
 metadata_sheet <- 1                            # options: sheet index or sheet name
 
+injection_order_path <- ""                     # optional: path to an injection-order file; leave "" to use metadata/sample order
+
 reference_path <- "data/reference_example.xlsx"
 reference_sheet <- 1                           # options: sheet index or sheet name
 use_reference_file <- TRUE                     # options: TRUE/FALSE (when FALSE, reference file is ignored)
@@ -26,6 +28,7 @@ reference_col_rt <- ""                         # e.g. "RT C18 25min 0.3mL"
 # Comparison group labels used by comparisons, heatmaps, and stats
 comparison_group_control <- "WT"
 comparison_group_treatment <- "TG"
+model_allowed_groups_by_model <- NULL          # optional: named vector, e.g. c("ModelA" = "WT,TG", "ModelB" = "WT,TG")
 
 # Output directory (root)
 # This is only the folder name where this run will be written. The pipeline does
@@ -96,7 +99,7 @@ pvalue_correction_method <- "FDR"              # options: "raw", "FDR", "Bonferr
 # "both" = current two-group workflow plus multi-group analysis
 comparison_mode <- "pairwise"                  # options: "pairwise", "multigroup", "both"
 multigroup_groups <- character(0)              # options: character vector, e.g. c("pre", "post", "recovery"); empty = auto-detect biological groups per model
-multigroup_test <- "anova"                     # options: "kruskal", "anova", "welch_anova"
+multigroup_test <- "kruskal"                   # options: "kruskal", "anova", "welch_anova"
 multigroup_pairwise_mode <- "selected"         # recommended: "selected"; options: "none", "selected", or explicit legacy "all"
 multigroup_pairwise_pairs <- NULL              # options: NULL or character vector, e.g. c("pre vs post", "pre vs recovery")
 
@@ -142,7 +145,7 @@ heatmap_breaks_limit <- 5                      # options: numeric > 0 (max absol
 make_sig_heatmap_by_model <- FALSE             # options: TRUE/FALSE (if TRUE, additional heatmaps will be generated showing only the significant features for each comparison)
 make_sig_heatmap_by_model_sex <- FALSE         # options: TRUE/FALSE (if TRUE, additional heatmaps will be generated showing only the significant features for each comparison)
 make_sig_heatmap_FvsM_within_group <- FALSE    # options: TRUE/FALSE (if TRUE, additional heatmaps will be generated for FvsM within each group)
-sig_heatmap_max_features <- 50                 # options: integer > 0 (max number of features to show in the significant heatmaps; set to a high number to include all significant features)   
+sig_heatmap_max_features <- 70                 # options: integer > 0 (max number of features to show in the significant heatmaps; set to a high number to include all significant features)   
 sig_heatmap_require_fc_cutoff <- TRUE          # options: TRUE/FALSE (if TRUE, only features that pass both the significance threshold and the fold-change cutoff will be included in the significant heatmaps; if FALSE, all features that pass the significance threshold will be included regardless of fold-change)
 
 # =============================================================================
