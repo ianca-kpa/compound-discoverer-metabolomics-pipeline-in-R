@@ -328,8 +328,8 @@ settings_builder_layout <- list(
 settings_glossary_map <- c(
   normalization_mode = "Preprocessing scenario applied before downstream filtering and statistics. Use PQN Sample when QC samples are absent or too few.",
   make_qc_diagnostics = "When TRUE, runs the optional QC/normalization audit plots and summary tables. Leave FALSE for faster routine runs.",
-  active_variant = "Chooses the RSD filter family: none disables RSD filtering, QC_RSD uses QC samples, and RSD uses raw SD/mean.",
-  rsd_thresholds = "Numeric RSD cutoff used with QC_RSD or RSD. Example: QC_RSD with 30 is saved as rsd_thresholds <- c(30).",
+  active_variant = "Chooses the RSD filter family: none disables RSD filtering, QC_RSD uses QC samples as percent RSD, and RSD uses the SD/mean ratio.",
+  rsd_thresholds = "Numeric RSD cutoff. QC_RSD uses percent units; RSD uses the SD/mean ratio, with values above 1 interpreted as percent cutoffs (20 -> 0.20).",
   low_variance_filter_method = "Controls the low-variance filter. Use iqr to remove the lowest-variance features, or none to keep them.",
   low_variance_filter_fraction = "Fraction of features removed by the IQR low-variance filter. Example: 0.20 removes the lowest 20%.",
   use_only_known = "When TRUE, keeps only features with known identities.",
