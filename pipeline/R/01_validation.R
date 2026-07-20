@@ -125,6 +125,18 @@ normalize_rsd_filter_type <- function(rsd_filter_type) {
   stop("rsd_filter_type must be 'QC_RSD' or 'RSD'.")
 }
 
+rsd_thresholds_for_calculation <- function(rsd_thresholds, rsd_filter_type = "QC_RSD") {
+  rsd_filter_type_local <- normalize_rsd_filter_type(rsd_filter_type)
+  rsd_thresholds_local <- suppressWarnings(as.numeric(rsd_thresholds))
+
+  if (identical(rsd_filter_type_local, "RSD")) {
+    over_one <- !is.na(rsd_thresholds_local) & rsd_thresholds_local > 1
+    rsd_thresholds_local[over_one] <- rsd_thresholds_local[over_one] / 100
+  }
+
+  rsd_thresholds_local
+}
+
 normalize_active_variant <- function(active_variant, rsd_thresholds, rsd_filter_type = "QC_RSD") {
   active_variant_local <- trimws(as.character(active_variant)[1])
   rsd_variant_prefix <- normalize_rsd_filter_type(rsd_filter_type)

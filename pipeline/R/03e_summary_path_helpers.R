@@ -24,9 +24,48 @@ append_filter_summary <- function(summary_tbl, step, before, after, out_csv = NU
   summary_tbl
 }
 
+format_qc_rsd_threshold_summary_lines <- function(qc_rsd_threshold_summary = NULL) {
+  if (is.null(qc_rsd_threshold_summary) ||
+      !is.data.frame(qc_rsd_threshold_summary) ||
+      nrow(qc_rsd_threshold_summary) == 0) {
+    return(character(0))
+  }
+
+  required_cols <- c("rsd_filter_type", "rsd_threshold", "kept")
+  if (!all(required_cols %in% names(qc_rsd_threshold_summary))) {
+    return(character(0))
+  }
+
+  qc_rsd_threshold_summary <- qc_rsd_threshold_summary %>%
+    dplyr::arrange(rsd_filter_type, rsd_threshold)
+
+  unlist(lapply(seq_len(nrow(qc_rsd_threshold_summary)), function(i) {
+    row <- qc_rsd_threshold_summary[i, , drop = FALSE]
+    effective_suffix <- ""
+    if ("rsd_threshold_effective" %in% names(row) &&
+        !is.na(row$rsd_threshold_effective) &&
+        !identical(as.numeric(row$rsd_threshold), as.numeric(row$rsd_threshold_effective))) {
+      effective_suffix <- paste0(
+        " (effective cutoff: ",
+        format(row$rsd_threshold_effective, scientific = FALSE, trim = TRUE),
+        ")"
+      )
+    }
+    paste0(
+      row$rsd_filter_type,
+      " <= ",
+      format(row$rsd_threshold, scientific = FALSE, trim = TRUE),
+      effective_suffix,
+      ": ",
+      row$kept
+    )
+  }), use.names = FALSE)
+}
+
 write_method_summary <- function(path,
                                  filter_summary = NULL,
-                                 injection_order_source = NULL) {
+                                 injection_order_source = NULL,
+                                 qc_rsd_threshold_summary = NULL) {
   value_or_na <- function(expr) {
     value <- tryCatch(force(expr), error = function(e) NULL)
     if (is.null(value) || length(value) == 0 || all(is.na(value))) {
@@ -54,6 +93,11 @@ write_method_summary <- function(path,
     }
   }
 
+  rsd_threshold_lines <- format_qc_rsd_threshold_summary_lines(qc_rsd_threshold_summary)
+  if (length(rsd_threshold_lines) > 0) {
+    rsd_threshold_lines <- c("rsd_threshold_summary:", rsd_threshold_lines)
+  }
+
   injection_order_source <- value_or_na(injection_order_source)
   real_injection_order_used <- if (grepl("^input_files_reference", injection_order_source)) {
     "TRUE"
@@ -78,6 +122,7 @@ write_method_summary <- function(path,
     paste0("pca_scaling: ", value_or_na(get0("pca_scaling", ifnotfound = NULL, inherits = TRUE))),
     paste0("real_injection_order_used: ", real_injection_order_used),
     paste0("injection_order_source: ", injection_order_source),
+    rsd_threshold_lines,
     feature_count_lines
   )
 

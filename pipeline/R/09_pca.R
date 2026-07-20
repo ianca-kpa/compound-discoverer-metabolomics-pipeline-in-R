@@ -337,7 +337,7 @@ plot_one_pca_subset <- function(mat_log2 = mat_log2,
           alpha = 0.15,
           level = 0.95,
           show.legend = TRUE,
-          type = "t"
+          type = "norm"
         )
         p <- p + ggplot2::scale_fill_manual(values = ellipse_values, breaks = ellipse_breaks, name = paste0(pca_legend_title(ellipse_var), " (ellipse)"))
       }
@@ -396,7 +396,7 @@ plot_one_pca_subset <- function(mat_log2 = mat_log2,
           alpha = 0.12,
           level = 0.95,
           show.legend = TRUE,
-          type = "t"
+          type = "norm"
         )
         p <- p + ggplot2::scale_fill_manual(values = ellipse_values, breaks = ellipse_breaks, name = paste0(pca_legend_title(ellipse_var), " (ellipse)"))
       }
@@ -840,7 +840,7 @@ plot_pca_pre_post_per_model <- function(mat_log2_pre,
           geom = "polygon",
           alpha = 0.12,
           level = 0.95,
-          type = "t",
+          type = "norm",
           show.legend = TRUE
         ) +
         ggplot2::scale_fill_manual(values = stage_colors, breaks = stage_levels, name = "Stage")
@@ -987,7 +987,7 @@ plot_qc_loess_audit_pca <- function(assay_num_pre,
         geom = "polygon",
         alpha = 0.12,
         level = 0.95,
-        type = "t",
+        type = "norm",
         show.legend = TRUE
       ) +
       ggplot2::scale_fill_manual(values = stage_colors, breaks = stage_levels, name = "Stage")

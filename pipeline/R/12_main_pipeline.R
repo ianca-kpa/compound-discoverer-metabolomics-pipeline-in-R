@@ -373,10 +373,21 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
     assay_work <- known$assay
     feature_tbl_work <- known$feature
 
+    n_after_known <- ncol(assay_work)
+    filter_summary <- append_filter_summary(
+      filter_summary,
+      "known_filter",
+      n2,
+      n_after_known,
+      out_csv = filter_summary_csv
+    )
+
     # -------------------------------------------------------------------------
     # Duplicate handling: apply duplicate collapsing right after Known-only filter
     # -------------------------------------------------------------------------
     step_info("Applying duplicate name handling (post-known filter)...")
+
+    n_before_duplicates <- ncol(assay_work)
 
     qc_rsd_for_duplicates <- NULL
     if (duplicate_name_strategy %in% c("reference_or_best_qc_rsd", "collapse_best_qc_rsd")) {
@@ -409,8 +420,8 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
 
     filter_summary <- append_filter_summary(
       filter_summary,
-      "known_filter",
-      n2,
+      paste0("duplicate_name_handling_", duplicate_name_strategy),
+      n_before_duplicates,
       ncol(assay_work),
       out_csv = filter_summary_csv
     )
@@ -418,23 +429,141 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
     rsd_variant_prefix <- rsd_filter_type
     variants <- list()
     variants$BASE <- list(mat = assay_work, feature = feature_tbl_work)
+    qc_rsd_threshold_summary <- NULL
 
     if (length(qc_idx) >= 2 && length(rsd_thresholds) > 0) {
       qc_rsd_all <- calc_qc_rsd(assay_work, qc_idx, rsd_filter_type = rsd_filter_type)
+      rsd_thresholds_calc <- rsd_thresholds_for_calculation(rsd_thresholds, rsd_filter_type)
+      rsd_audit_thresholds <- sort(unique(as.numeric(rsd_thresholds)))
+      if (identical(rsd_variant_prefix, "QC_RSD") || identical(rsd_variant_prefix, "RSD")) {
+        rsd_audit_thresholds <- sort(unique(c(rsd_audit_thresholds, 20, 50, 80, 100, 150)))
+      }
+      rsd_audit_thresholds_calc <- rsd_thresholds_for_calculation(rsd_audit_thresholds, rsd_filter_type)
+
+      if (identical(rsd_variant_prefix, "RSD") &&
+          any(!is.na(rsd_thresholds) & as.numeric(rsd_thresholds) > 1)) {
+        step_info(
+          "RSD thresholds interpreted as percent values for ratio calculation: ",
+          paste(
+            paste0(
+              format(rsd_thresholds, scientific = FALSE, trim = TRUE),
+              " -> ",
+              format(rsd_thresholds_calc, scientific = FALSE, trim = TRUE)
+            ),
+            collapse = ", "
+          )
+        )
+      }
 
       df_qc_rsd_pre <- tibble(
         featureID = names(qc_rsd_all),
         qc_rsd = as.numeric(qc_rsd_all)
-      ) %>% arrange(qc_rsd)
+      ) %>%
+        dplyr::left_join(
+          feature_tbl_work %>%
+            dplyr::select(
+              featureID,
+              dplyr::any_of(c("display_name", "Name", "Name_canon", "Ref ion", "Formula", "mz", "RT"))
+            ),
+          by = "featureID"
+        ) %>%
+        dplyr::arrange(qc_rsd)
+
+      qc_rsd_threshold_audit <- dplyr::bind_rows(lapply(seq_along(rsd_audit_thresholds), function(i) {
+        thr <- rsd_audit_thresholds[i]
+        thr_calc <- rsd_audit_thresholds_calc[i]
+        df_qc_rsd_pre %>%
+          dplyr::mutate(
+            rsd_filter_type = rsd_variant_prefix,
+            rsd_threshold = thr,
+            rsd_threshold_effective = thr_calc,
+            rsd_decision = dplyr::case_when(
+              is.na(qc_rsd) ~ "removed",
+              qc_rsd <= thr_calc ~ "kept",
+              TRUE ~ "removed"
+            ),
+            exclusion_reason = dplyr::case_when(
+              is.na(qc_rsd) ~ "qc_rsd_missing",
+              qc_rsd > thr_calc ~ paste0(rsd_variant_prefix, "_gt_", thr),
+              TRUE ~ "kept"
+            )
+          )
+      })) %>%
+        dplyr::arrange(rsd_threshold, rsd_decision, qc_rsd)
+
+      qc_rsd_threshold_summary <- qc_rsd_threshold_audit %>%
+        dplyr::group_by(rsd_filter_type, rsd_threshold, rsd_threshold_effective) %>%
+        dplyr::summarise(
+          kept = sum(rsd_decision == "kept", na.rm = TRUE),
+          removed = sum(rsd_decision == "removed", na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        dplyr::mutate(
+          total = kept + removed,
+          pct_kept = dplyr::if_else(total > 0, round(100 * kept / total, 2), NA_real_),
+          pct_removed = dplyr::if_else(total > 0, round(100 * removed / total, 2), NA_real_)
+        ) %>%
+        dplyr::arrange(rsd_threshold)
+
+      out_qc_rsd_threshold_summary <- file.path(
+        paths$global$audits,
+        paste0(tolower(rsd_variant_prefix), "_threshold_summary_pre_iqr.csv")
+      )
+
+      qc_rsd_readme_lines <- format_qc_rsd_threshold_summary_lines(qc_rsd_threshold_summary)
+      if (length(qc_rsd_readme_lines) > 0) {
+        rsd_scale_note <- if (identical(rsd_variant_prefix, "RSD")) {
+          "RSD values are SD/mean ratios; thresholds above 1 are interpreted as percent cutoffs for calculation (20 -> 0.20)."
+        } else {
+          "QC_RSD values are percent RSD values calculated from QC samples (20 means 20%)."
+        }
+        readme_lines <- c(
+          "",
+          paste0(rsd_variant_prefix, " threshold summary before IQR"),
+          rsd_scale_note,
+          paste0("Features retained at candidate ", rsd_variant_prefix, " cutoffs:"),
+          qc_rsd_readme_lines
+        )
+        if (debug_mode) {
+          readme_lines <- c(readme_lines, paste0("Detailed table: ", out_qc_rsd_threshold_summary))
+        }
+        cat(
+          readme_lines,
+          file = output_readme_path,
+          append = TRUE,
+          sep = "\n"
+        )
+      }
 
       if (debug_mode) {
         out_qc_rsd_pre <- file.path(paths$global$audits, paste0(tolower(rsd_variant_prefix), "_values_pre_variants.csv"))
         write_csv_safe(df_qc_rsd_pre, out_qc_rsd_pre)
         log_written_object(log_path, out_qc_rsd_pre, df_qc_rsd_pre, note = paste0(rsd_variant_prefix, " values (pre-variants)"))
+
+        out_qc_rsd_threshold_audit <- file.path(
+          paths$global$audits,
+          paste0(tolower(rsd_variant_prefix), "_threshold_decisions_pre_iqr.csv")
+        )
+        write_csv_safe(qc_rsd_threshold_audit, out_qc_rsd_threshold_audit)
+        log_written_object(
+          log_path,
+          out_qc_rsd_threshold_audit,
+          qc_rsd_threshold_audit,
+          note = paste0(rsd_variant_prefix, " kept/removed decisions before IQR")
+        )
+
+        write_csv_safe(qc_rsd_threshold_summary, out_qc_rsd_threshold_summary)
+        log_written_object(
+          log_path,
+          out_qc_rsd_threshold_summary,
+          qc_rsd_threshold_summary,
+          note = paste0(rsd_variant_prefix, " threshold summary before IQR")
+        )
       }
 
       for (thr in rsd_thresholds) {
-        keep <- names(qc_rsd_all)[!is.na(qc_rsd_all) & qc_rsd_all <= thr]
+        thr_calc <- rsd_thresholds_for_calculation(thr, rsd_filter_type)
+        keep <- names(qc_rsd_all)[!is.na(qc_rsd_all) & qc_rsd_all <= thr_calc]
         variants[[paste0(rsd_variant_prefix, thr)]] <- list(
           mat = assay_work[, keep, drop = FALSE],
           feature = feature_tbl_work %>% filter(featureID %in% keep)
@@ -472,6 +601,14 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
       ""
     }
     step_info("Active variant selected: ", active_variant_effective, active_variant_log_note, " | n_features=", ncol(variants$ACTIVE$mat))
+
+    filter_summary <- append_filter_summary(
+      filter_summary,
+      paste0("rsd_filter_", active_variant_effective),
+      ncol(assay_work),
+      ncol(variants$ACTIVE$mat),
+      out_csv = filter_summary_csv
+    )
 
     if (debug_mode) {
       out_post_rsd_mat <- file.path(
@@ -1648,7 +1785,8 @@ run_untargeted_pipeline <- function(debug_mode = FALSE) {
             write_method_summary(
               method_summary_path,
               filter_summary = filter_summary,
-              injection_order_source = assay_bundle$drift_injection_order_source
+              injection_order_source = assay_bundle$drift_injection_order_source,
+              qc_rsd_threshold_summary = qc_rsd_threshold_summary
             )
             step_info("Method summary exported: ", method_summary_path)
           },
