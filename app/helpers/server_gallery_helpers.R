@@ -56,8 +56,9 @@ build_pipeline_log_summary_ui <- function(log_text) {
   lines <- trimws(lines)
   lines <- lines[nzchar(lines)]
 
-  error_lines <- grep("\\b(error|failed|failure|fatal|cannot|did not start)\\b", lines, ignore.case = TRUE, value = TRUE)
-  warning_lines <- grep("\\b(warning|warn|missing|skipped)\\b", lines, ignore.case = TRUE, value = TRUE)
+  warning_lines <- grep("^\\[WARNING\\]|\\b(warning|warn|missing|skipped)\\b", lines, ignore.case = TRUE, value = TRUE)
+  error_candidates <- grep("\\b(error|failed|failure|fatal|cannot|did not start)\\b", lines, ignore.case = TRUE, value = TRUE)
+  error_lines <- setdiff(error_candidates, warning_lines)
   warning_lines <- setdiff(warning_lines, error_lines)
 
   if (length(error_lines) > 0) {
