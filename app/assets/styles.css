@@ -98,6 +98,25 @@ table {
 	overflow-x: auto;
 }
 
+#settings_builder_ui.shiny-html-output,
+#settings_builder_ui .shiny-bound-output,
+#settings_builder_ui,
+#settings_builder_ui .settings-builder-shell,
+#settings_builder_ui .settings-tab-pane,
+#settings_builder_ui .settings-layout-grid,
+#settings_builder_ui .settings-column-stack,
+#settings_builder_ui .settings-section-card,
+#settings_builder_ui .settings-fields-grid,
+#settings_builder_ui .form-group,
+#settings_builder_ui .shiny-input-container,
+#settings_builder_ui .selectize-control {
+	overflow: visible;
+}
+
+#settings_builder_ui .selectize-dropdown {
+	z-index: 10000;
+}
+
 .content-card table,
 .content-card .table {
 	width: 100%;
